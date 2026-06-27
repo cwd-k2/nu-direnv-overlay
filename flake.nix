@@ -143,7 +143,7 @@
               source $apply
               hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
               hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
-              __nu-direnv-overlay write-source
+              __nu-direnv-overlay write-source --cleanup-only
               $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
             '
           )

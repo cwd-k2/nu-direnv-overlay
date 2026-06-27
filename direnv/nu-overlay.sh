@@ -41,6 +41,30 @@ __nu_direnv_overlay_path_id() {
   printf '%s' "${sum%% *}"
 }
 
+__nu_direnv_overlay_print_export_tracking() {
+  local name
+
+  # Record exported commands, aliases, and externs after the overlays load.
+  # Nushell cleanup uses this to hide definitions that can remain visible after
+  # `overlay hide` marks the overlay inactive.
+  printf 'let nu_direnv_overlay_modules = ['
+  for name in "${__NU_DIRENV_OVERLAY_INTERNAL_NAMES[@]}"; do
+    printf '%s ' "$(__nu_direnv_overlay_quote_nu "$name")"
+  done
+  printf ']\n'
+
+  cat <<'EOF'
+$env.NU_DIRENV_OVERLAY_EXPORTS = (
+  scope modules
+  | where {|module| $module.name in $nu_direnv_overlay_modules }
+  | each {|module| (($module.commands | get name) ++ ($module.aliases | get name) ++ ($module.externs | get name)) }
+  | flatten
+  | uniq
+  | str join (char us)
+)
+EOF
+}
+
 __nu_direnv_overlay_generate_apply() {
   local dir apply active name internal_name path quoted_name quoted_path
 
@@ -72,19 +96,7 @@ __nu_direnv_overlay_generate_apply() {
       active+="$name"
     done
     printf '$env.NU_DIRENV_OVERLAY_ACTIVE = %s\n' "$(__nu_direnv_overlay_quote_nu "$active")"
-    printf 'let nu_direnv_overlay_modules = ['
-    for name in "${__NU_DIRENV_OVERLAY_INTERNAL_NAMES[@]}"; do
-      printf '%s ' "$(__nu_direnv_overlay_quote_nu "$name")"
-    done
-    printf ']\n'
-    printf '$env.NU_DIRENV_OVERLAY_EXPORTS = (\n'
-    printf '  scope modules\n'
-    printf '  | where {|module| $module.name in $nu_direnv_overlay_modules }\n'
-    printf '  | each {|module| (($module.commands | get name) ++ ($module.aliases | get name) ++ ($module.externs | get name)) }\n'
-    printf '  | flatten\n'
-    printf '  | uniq\n'
-    printf '  | str join (char us)\n'
-    printf ')\n'
+    __nu_direnv_overlay_print_export_tracking
   } >"$apply"
 
   export DIRENV_NU_OVERLAY_APPLY="$apply"

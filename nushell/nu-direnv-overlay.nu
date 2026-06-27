@@ -15,42 +15,58 @@ def "__nu-direnv-overlay active-names" [] {
 }
 
 def "__nu-direnv-overlay exported-names" [] {
+  # Nushell can leave exported commands/aliases visible after `overlay hide`.
+  # The generated apply file records exactly which names the project overlay
+  # exported, so cleanup can hide only those definitions.
   $env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != ""
 }
 
+def "__nu-direnv-overlay hide-overlay-line" [name: string] {
+  let quoted = (__nu-direnv-overlay quote $name)
+  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ PWD ] ($quoted) }"
+}
+
+def "__nu-direnv-overlay hide-export-line" [name: string] {
+  $"hide ((__nu-direnv-overlay quote $name))"
+}
+
 def "__nu-direnv-overlay cleanup-lines" [] {
-  let hide_overlays = (
-    __nu-direnv-overlay active-names
-    | each {|name|
-        let quoted = (__nu-direnv-overlay quote $name)
-        $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ PWD ] ($quoted) }"
-      }
-  )
-
-  let hide_exports = (
-    __nu-direnv-overlay exported-names
-    | each {|name| $"hide ((__nu-direnv-overlay quote $name))" }
-  )
-
+  let hide_overlays = (__nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name })
+  let hide_exports = (__nu-direnv-overlay exported-names | each {|name| __nu-direnv-overlay hide-export-line $name })
   $hide_overlays ++ $hide_exports
 }
 
-def --env "__nu-direnv-overlay write-source" [--clear-apply] {
-  let apply = if $clear_apply { "" } else { $env.DIRENV_NU_OVERLAY_APPLY? | default "" }
-  let cleanup_lines = (__nu-direnv-overlay cleanup-lines)
+def "__nu-direnv-overlay apply-path" [--cleanup-only] {
+  if $cleanup_only {
+    ""
+  } else {
+    $env.DIRENV_NU_OVERLAY_APPLY? | default ""
+  }
+}
+
+def "__nu-direnv-overlay apply-wrapper-lines" [apply: string] {
+  (__nu-direnv-overlay cleanup-lines) ++ [$"source ((__nu-direnv-overlay quote $apply))"]
+}
+
+def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
+  (__nu-direnv-overlay cleanup-lines) ++ [
+    '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
+    '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
+  ]
+}
+
+def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
+  let apply = (__nu-direnv-overlay apply-path --cleanup-only=$cleanup_only)
 
   # direnv generates the real apply file while evaluating the allowed .envrc.
   # This per-session wrapper gives Nushell a stable path to source from the
   # pre_prompt string hook, while its contents can change after every direnv run.
   let body = if ($apply != "" and ($apply | path exists)) {
-    $cleanup_lines ++ [$"source ((__nu-direnv-overlay quote $apply))"]
+    __nu-direnv-overlay apply-wrapper-lines $apply
   } else {
     # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
     # cannot produce an apply file for the old overlays.
-    $cleanup_lines ++ [
-      '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
-      '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
-    ]
+    __nu-direnv-overlay cleanup-wrapper-lines
   }
 
   mkdir ($overlay_source | path dirname)
@@ -111,7 +127,7 @@ def --env "__nu-direnv-overlay export-direnv" [--force] {
 
   if ($exported.stdout | str trim | is-empty) {
     hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
-    __nu-direnv-overlay write-source --clear-apply
+    __nu-direnv-overlay write-source --cleanup-only
     __nu-direnv-overlay install-source-hook
     return
   }

@@ -136,6 +136,34 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/reloaded-apply-test.nu"
 
+          stale_cleanup=$(
+            ${pkgs.nushell}/bin/nu --no-config-file --commands '
+              source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+              const apply = "'"$reloaded_apply"'"
+              source $apply
+              hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
+              hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+              __nu-direnv-overlay write-source
+              $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
+            '
+          )
+          if ! grep -q 'overlay hide "nu-direnv-' "$stale_cleanup"; then
+            echo "cleanup did not include active nu-direnv overlay" >&2
+            cat "$stale_cleanup" >&2
+            exit 1
+          fi
+
+          cat > "$TMPDIR/stale-cleanup-test.nu" <<EOF
+          const apply = '$reloaded_apply'
+          const cleanup = '$stale_cleanup'
+          source \$apply
+          source \$cleanup
+          if ((overlay list | where name =~ '^nu-direnv-' and active == true | is-not-empty)) {
+            error make { msg: "nu-direnv overlay remained active after stale cleanup" }
+          }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/stale-cleanup-test.nu"
+
           touch "$out"
         '';
       }

@@ -10,24 +10,26 @@ def --env "__nu-direnv-overlay quote" [value: string] {
 
 def --env "__nu-direnv-overlay write-source" [] {
   let apply = ($env.DIRENV_NU_OVERLAY_APPLY? | default "")
+  let tracked = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+  let active = (overlay list | where name =~ '^nu-direnv-' and active == true | get name)
+  let previous = ($tracked ++ $active | uniq)
+  let hide_lines = (
+    $previous
+    | each {|name|
+        let quoted = (__nu-direnv-overlay quote $name)
+        $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide ($quoted) }"
+      }
+  )
 
   # direnv generates the real apply file while evaluating the allowed .envrc.
   # This per-session wrapper gives Nushell a stable path to source from the
   # pre_prompt string hook, while its contents can change after every direnv run.
   let body = if ($apply != "" and ($apply | path exists)) {
-    $"source ((__nu-direnv-overlay quote $apply))"
+    ($hide_lines ++ [$"source ((__nu-direnv-overlay quote $apply))"] | str join (char newline))
   } else {
     # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
     # cannot produce an apply file for the old overlays, so Nushell generates
-    # a small cleanup script from the active overlay list it already tracks.
-    let previous = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
-    let hide_lines = (
-      $previous
-      | each {|name|
-          let quoted = (__nu-direnv-overlay quote $name)
-          $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide ($quoted) }"
-        }
-    )
+    # a small cleanup script from tracked and currently active overlay names.
     let active_line = '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
     ($hide_lines ++ [$active_line] | str join (char newline))
   }

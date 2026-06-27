@@ -62,6 +62,12 @@
             if (($env.config.hooks.env_change.PWD | length) != 2) {
               error make { msg: "PWD hook was not deduplicated" }
             }
+            __nu-direnv-overlay install-prompt-hooks
+            __nu-direnv-overlay install-prompt-hooks
+            let prompt_hooks = ($env.config.hooks.pre_prompt | last 2)
+            if (($prompt_hooks.0 != "__nu-direnv-overlay prompt-sync") or (not ($prompt_hooks.1 | str starts-with "source "))) {
+              error make { msg: "prompt hooks were not installed in sync/source order" }
+            }
           '
 
           printf 'source %q\n' "$pkg/share/direnv/lib/nu-overlay.sh" > "$XDG_CONFIG_HOME/direnv/direnvrc"
@@ -110,7 +116,7 @@
           open "$TMPDIR/inherited.json" | load-env
           \$env.PATH = (\$env.PATH | prepend "${pkgs.direnv}/bin")
           source "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
-          __nu-direnv-overlay export-direnv
+          __nu-direnv-overlay sync-overlays
           nu-direnv-overlay status | get apply
           EOF
           hook_apply=$(
@@ -147,6 +153,32 @@
           if (st) != "status" { error make { msg: "st command did not reload from inherited direnv state" } }
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/reloaded-apply-test.nu"
+
+          external_hook_source=$(
+            cd "$TMPDIR/project"
+            ${pkgs.nushell}/bin/nu --no-config-file --commands '
+              $env.config.hooks.env_change = { PWD: [{|before, after| null }] }
+              $env.PATH = ($env.PATH | prepend "${pkgs.direnv}/bin")
+              source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+              __nu-direnv-overlay install-pwd-hook
+              direnv export json | from json | load-env
+              __nu-direnv-overlay on-pwd "/tmp" "'"$TMPDIR/project"'"
+              __nu-direnv-overlay prompt-sync
+              $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
+            '
+          )
+          if ! grep -q '^source ' "$external_hook_source"; then
+            echo "external hook compatibility did not source generated apply" >&2
+            cat "$external_hook_source" >&2
+            exit 1
+          fi
+          cat > "$TMPDIR/external-hook-apply-test.nu" <<EOF
+          const source_path = '$external_hook_source'
+          source \$source_path
+          if (build) != "built" { error make { msg: "external hook compatibility did not load build command" } }
+          if (st) != "status" { error make { msg: "external hook compatibility did not load st command" } }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/external-hook-apply-test.nu"
 
           stale_cleanup=$(
             ${pkgs.nushell}/bin/nu --no-config-file --commands '

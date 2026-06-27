@@ -2,6 +2,7 @@
 # consume ordinary runtime variables for file paths or overlay names, so this
 # integration writes small literal Nushell files and sources those from hooks.
 const overlay_source = ($nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu")
+const overlay_sync_command = "__nu-direnv-overlay prompt-sync"
 const overlay_source_command = $"source '($overlay_source)'"
 
 def --env "__nu-direnv-overlay quote" [value: string] {
@@ -73,13 +74,16 @@ def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
   $body | str join (char newline) | save --force $overlay_source
 }
 
-def --env "__nu-direnv-overlay install-source-hook" [] {
-  let hooks = ($env.config.hooks.pre_prompt? | default [])
-  if not ($hooks | any {|hook| $hook == $overlay_source_command }) {
-    # String hooks are parsed as if typed at the prompt, which lets overlay
-    # definitions escape hook closure scope and become visible interactively.
-    $env.config.hooks.pre_prompt = ($hooks | append $overlay_source_command)
-  }
+def --env "__nu-direnv-overlay install-prompt-hooks" [] {
+  # String hooks are parsed as if typed at the prompt. The sync hook updates the
+  # wrapper after other PWD hooks have had a chance to load direnv's env diff;
+  # the source hook then applies overlay parser keywords in the interactive
+  # scope, where exported definitions become visible.
+  let hooks = (
+    $env.config.hooks.pre_prompt? | default []
+    | where {|hook| $hook != $overlay_sync_command and $hook != $overlay_source_command }
+  )
+  $env.config.hooks.pre_prompt = ($hooks | append $overlay_sync_command | append $overlay_source_command)
 }
 
 def --env "__nu-direnv-overlay install-pwd-hook" [] {
@@ -95,63 +99,26 @@ def --env "__nu-direnv-overlay install-pwd-hook" [] {
   $env.__NU_DIRENV_OVERLAY_PWD_HOOK_INSTALLED = "1"
 }
 
-def "__nu-direnv-overlay has-active-overlays" [] {
-  let active = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
-  if ($active | is-empty) {
-    false
-  } else {
-    $active | all {|name|
-      overlay list | where name == $name and active == true | is-not-empty
-    }
-  }
+def --env "__nu-direnv-overlay request-sync" [] {
+  $env.__NU_DIRENV_OVERLAY_SYNC_PENDING = "1"
 }
 
-def --env "__nu-direnv-overlay clear-direnv-state" [] {
-  hide-env DIRENV_DIFF --ignore-errors
-  hide-env DIRENV_DIR --ignore-errors
-  hide-env DIRENV_FILE --ignore-errors
-  hide-env DIRENV_WATCHES --ignore-errors
-  hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
-}
-
-def --env "__nu-direnv-overlay export-direnv" [--force] {
-  # Match the direnv shell hook model: ask direnv for the environment diff, load
-  # that diff into this shell, then apply the Nushell-only overlay changes.
-  if $force {
-    __nu-direnv-overlay clear-direnv-state
-  }
-
-  mut exported = (direnv export json | complete)
-  if $exported.exit_code != 0 {
-    print --stderr ($exported.stderr | str trim)
-    return
-  }
-
-  if ($exported.stdout | str trim | is-empty) {
-    if (not $force) and (($env.DIRENV_DIR? | default "") != "") and (not (__nu-direnv-overlay has-active-overlays)) {
-      __nu-direnv-overlay clear-direnv-state
-      $exported = (direnv export json | complete)
-      if $exported.exit_code != 0 {
-        print --stderr ($exported.stderr | str trim)
-        return
-      }
-    }
-  }
-
-  if ($exported.stdout | str trim | is-empty) {
-    hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
-    __nu-direnv-overlay write-source --cleanup-only
-    __nu-direnv-overlay install-source-hook
-    return
-  }
-
-  $exported.stdout | from json | load-env
+def --env "__nu-direnv-overlay sync-overlays" [] {
   __nu-direnv-overlay write-source
-  __nu-direnv-overlay install-source-hook
+  __nu-direnv-overlay install-prompt-hooks
+}
+
+def --env "__nu-direnv-overlay prompt-sync" [] {
+  if (($env.__NU_DIRENV_OVERLAY_SYNC_PENDING? | default "") != "1") {
+    return
+  }
+
+  hide-env __NU_DIRENV_OVERLAY_SYNC_PENDING --ignore-errors
+  __nu-direnv-overlay sync-overlays
 }
 
 def --env "__nu-direnv-overlay on-pwd" [before?: string, after?: string] {
-  __nu-direnv-overlay export-direnv
+  __nu-direnv-overlay request-sync
 }
 
 export def --env "nu-direnv-overlay status" [] {
@@ -164,12 +131,14 @@ export def --env "nu-direnv-overlay status" [] {
 }
 
 export def --env "nu-direnv-overlay reload" [] {
-  __nu-direnv-overlay export-direnv --force
+  __nu-direnv-overlay request-sync
+  __nu-direnv-overlay prompt-sync
 }
 
 if $nu.is-interactive {
   # Official Nushell hooks only run in interactive sessions. That is exactly
   # where overlays matter, so non-interactive `nu -c` and scripts stay inert.
   __nu-direnv-overlay install-pwd-hook
-  __nu-direnv-overlay export-direnv
+  __nu-direnv-overlay install-prompt-hooks
+  __nu-direnv-overlay request-sync
 }

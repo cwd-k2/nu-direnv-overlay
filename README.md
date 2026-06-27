@@ -66,22 +66,29 @@ use nu-overlay overlay/docker.nu
 
 ## How It Works
 
+`nu-direnv-overlay` does not replace direnv's Nushell hook. Keep the normal
+direnv hook that runs `direnv export json` and loads the resulting environment;
+this project only consumes the extra `DIRENV_NU_OVERLAY_APPLY` variable produced
+by `.envrc`.
+
 The integration follows direnv's normal shell-hook model:
 
 ```text
-Nushell PWD hook
+Nushell direnv hook
   -> direnv export json
   -> .envrc use nu-overlay
   -> /tmp/nu-direnv-overlay.XXXXXXXXXX/apply.nu
   -> DIRENV_NU_OVERLAY_APPLY
   -> Nushell load-env
-  -> Nushell writes a per-session wrapper
-  -> Nushell pre_prompt sources the wrapper
+nu-direnv-overlay pre_prompt hook
+  -> writes a per-session wrapper
+  -> sources the wrapper
 ```
 
-direnv still owns `.envrc` evaluation and file watching. Nushell only applies
-the resulting state inside the parent shell, because a child `direnv` process
-cannot mutate parent-shell overlays directly.
+direnv still owns `.envrc` evaluation, environment loading, and file watching.
+`nu-direnv-overlay` only applies the resulting Nushell overlay state inside the
+parent shell, because a child `direnv` process cannot mutate parent-shell
+overlays directly.
 
 The `.envrc` function writes a Nushell apply file and exports its path as
 `DIRENV_NU_OVERLAY_APPLY`:
@@ -189,6 +196,10 @@ This installs `nu-direnv-overlay`, `direnv`, and `nushell`, registers the
 direnv stdlib function system-wide, and exposes the Nushell autoload file from
 the system profile.
 
+You still need the normal Nushell direnv hook in your Nushell configuration.
+This module intentionally does not replace that hook; it only adds overlay
+support on top of the environment that direnv has already loaded.
+
 ## Home Manager
 
 ```nix
@@ -197,6 +208,8 @@ the system profile.
   programs.nu-direnv-overlay.enable = true;
 }
 ```
+
+You still need the normal Nushell direnv hook in your Nushell configuration.
 
 ## Profile Install
 

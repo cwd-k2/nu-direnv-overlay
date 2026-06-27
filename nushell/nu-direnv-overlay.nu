@@ -1,0 +1,94 @@
+# Nushell's `source` and `overlay use/hide` are parser keywords. They cannot
+# consume ordinary runtime variables for file paths or overlay names, so this
+# integration writes small literal Nushell files and sources those from hooks.
+const overlay_source = ($nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu")
+const overlay_source_command = $"source '($overlay_source)'"
+
+def --env "__nu-direnv-overlay quote" [value: string] {
+  $value | to nuon
+}
+
+def --env "__nu-direnv-overlay write-source" [] {
+  let apply = ($env.DIRENV_NU_OVERLAY_APPLY? | default "")
+
+  # direnv generates the real apply file while evaluating the allowed .envrc.
+  # This per-session wrapper gives Nushell a stable path to source from the
+  # pre_prompt string hook, while its contents can change after every direnv run.
+  let body = if ($apply != "" and ($apply | path exists)) {
+    $"source ((__nu-direnv-overlay quote $apply))"
+  } else {
+    # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
+    # cannot produce an apply file for the old overlays, so Nushell generates
+    # a small cleanup script from the active overlay list it already tracks.
+    let previous = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+    let hide_lines = (
+      $previous
+      | each {|name|
+          let quoted = (__nu-direnv-overlay quote $name)
+          $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide ($quoted) }"
+        }
+    )
+    let active_line = '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
+    ($hide_lines ++ [$active_line] | str join (char newline))
+  }
+
+  mkdir ($overlay_source | path dirname)
+  $body | save --force $overlay_source
+}
+
+def --env "__nu-direnv-overlay install-source-hook" [] {
+  let hooks = ($env.config.hooks.pre_prompt? | default [])
+  if not ($hooks | any {|hook| $hook == $overlay_source_command }) {
+    # String hooks are parsed as if typed at the prompt, which lets overlay
+    # definitions escape hook closure scope and become visible interactively.
+    $env.config.hooks.pre_prompt = ($hooks | append $overlay_source_command)
+  }
+}
+
+def --env "__nu-direnv-overlay export-direnv" [] {
+  # Match direnv's shell hook model: ask direnv for the environment diff, load
+  # that diff into this shell, then apply the Nushell-only overlay changes.
+  let exported = (direnv export json | complete)
+  if $exported.exit_code != 0 {
+    print --stderr ($exported.stderr | str trim)
+    return
+  }
+
+  if ($exported.stdout | str trim | is-empty) {
+    hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+    __nu-direnv-overlay write-source
+    __nu-direnv-overlay install-source-hook
+    return
+  }
+
+  $exported.stdout | from json | load-env
+  __nu-direnv-overlay write-source
+  __nu-direnv-overlay install-source-hook
+}
+
+def --env "__nu-direnv-overlay on-pwd" [before?: string, after?: string] {
+  __nu-direnv-overlay export-direnv
+}
+
+export def --env "nu-direnv-overlay status" [] {
+  {
+    source: $overlay_source
+    apply: ($env.DIRENV_NU_OVERLAY_APPLY? | default null)
+    active: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+  }
+}
+
+export def --env "nu-direnv-overlay reload" [] {
+  __nu-direnv-overlay export-direnv
+}
+
+if $nu.is-interactive {
+  # Official Nushell hooks only run in interactive sessions. That is exactly
+  # where overlays matter, so non-interactive `nu -c` and scripts stay inert.
+  let env_change = ($env.config.hooks.env_change? | default {})
+  let pwd_hooks = ($env_change.PWD? | default [])
+  let hook = {|before, after| __nu-direnv-overlay on-pwd $before $after }
+
+  $env.config.hooks.env_change = ($env_change | upsert PWD ($pwd_hooks | append $hook))
+  __nu-direnv-overlay export-direnv
+}

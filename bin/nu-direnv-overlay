@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-help}" in
+  hook)
+    case "${2:-}" in
+      nu|nushell)
+        pkg=${NU_DIRENV_OVERLAY_PKG:-$(cd "$(dirname "$0")/.." && pwd -P)}
+        printf 'source %q\n' "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+        ;;
+      direnv)
+        pkg=${NU_DIRENV_OVERLAY_PKG:-$(cd "$(dirname "$0")/.." && pwd -P)}
+        printf 'source %q\n' "$pkg/share/direnv/lib/nu-overlay.sh"
+        ;;
+      *)
+        printf 'usage: nu-direnv-overlay hook nu|direnv\n' >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  paths)
+    pkg=${NU_DIRENV_OVERLAY_PKG:-$(cd "$(dirname "$0")/.." && pwd -P)}
+    printf '%s\n' "$pkg/share/direnv/lib/nu-overlay.sh"
+    printf '%s\n' "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+    ;;
+  hook-direnv)
+    pkg=${NU_DIRENV_OVERLAY_PKG:-$(cd "$(dirname "$0")/.." && pwd -P)}
+    printf 'source %q\n' "$pkg/share/direnv/lib/nu-overlay.sh"
+    ;;
+  help|--help|-h)
+    cat <<'EOF'
+nu-direnv-overlay
+
+Installed files:
+  nu-direnv-overlay paths
+
+Print shell hooks:
+  nu-direnv-overlay hook nu
+  nu-direnv-overlay hook direnv
+
+For direnv configs that do not load package share directories automatically:
+  eval "$(nu-direnv-overlay hook direnv)"
+EOF
+    ;;
+  *)
+    printf 'unknown command: %s\n' "$1" >&2
+    exit 2
+    ;;
+esac

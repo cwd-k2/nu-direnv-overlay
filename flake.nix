@@ -180,11 +180,12 @@
               source $apply
               hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
               hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+              $env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST = "generator"
               __nu-direnv-overlay write-source --cleanup-only
               $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
             '
           )
-          if ! grep -q 'overlay hide --keep-env \[ PWD \] "nu-direnv-' "$stale_cleanup"; then
+          if ! grep -q 'overlay hide --keep-env .*"nu-direnv-' "$stale_cleanup"; then
             echo "cleanup did not include active nu-direnv overlay" >&2
             cat "$stale_cleanup" >&2
             exit 1
@@ -220,9 +221,13 @@
           const cleanup = '$stale_cleanup'
           source \$apply
           cd "$TMPDIR"
+          \$env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST = "outside"
           source \$cleanup
           if \$env.PWD != "$TMPDIR" {
             error make { msg: "cleanup changed PWD while hiding overlay" }
+          }
+          if (\$env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST? | default "") != "outside" {
+            error make { msg: "cleanup restored environment while hiding overlay" }
           }
           if ((scope commands | where name in [build st] | is-not-empty)) {
             error make { msg: "overlay commands remained visible after cleanup" }

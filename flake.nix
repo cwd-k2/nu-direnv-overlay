@@ -71,6 +71,8 @@
           use nu-overlay overlay/git.nu
           EOF
           cat > "$TMPDIR/project/overlay/task.nu" <<'EOF'
+          export const project_name = "project"
+          export module nested { export def hi [] { "hi" } }
           export def build [] { "built" }
           EOF
           cat > "$TMPDIR/project/overlay/git.nu" <<'EOF'
@@ -169,6 +171,16 @@
           fi
           if ! grep -q 'hide "build"' "$stale_cleanup"; then
             echo "cleanup did not hide build command" >&2
+            cat "$stale_cleanup" >&2
+            exit 1
+          fi
+          if ! grep -q 'hide "project_name"' "$stale_cleanup"; then
+            echo "cleanup did not hide exported constant" >&2
+            cat "$stale_cleanup" >&2
+            exit 1
+          fi
+          if ! grep -q 'hide "nested"' "$stale_cleanup"; then
+            echo "cleanup did not hide exported submodule" >&2
             cat "$stale_cleanup" >&2
             exit 1
           fi

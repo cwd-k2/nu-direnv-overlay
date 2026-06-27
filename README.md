@@ -75,7 +75,8 @@ Nushell PWD hook
   -> /tmp/nu-direnv-overlay.XXXXXXXXXX/apply.nu
   -> DIRENV_NU_OVERLAY_APPLY
   -> Nushell load-env
-  -> Nushell source apply.nu
+  -> Nushell writes a per-session wrapper
+  -> Nushell pre_prompt sources the wrapper
 ```
 
 direnv still owns `.envrc` evaluation and file watching. Nushell only applies
@@ -92,12 +93,26 @@ The `.envrc` function writes a Nushell apply file and exports its path as
 That file is plain Nushell and can be inspected directly:
 
 ```nu
-if ((overlay list | where name == "nu-direnv-1000-123456789-111111111" and active == true | is-not-empty)) { overlay hide "nu-direnv-1000-123456789-111111111" }
 # task
 overlay use --reload "/abs/path/overlay/task.nu" as "nu-direnv-1000-123456789-111111111"
 # git
 overlay use --reload "/abs/path/overlay/git.nu" as "nu-direnv-1000-123456789-222222222"
 $env.NU_DIRENV_OVERLAY_ACTIVE = "nu-direnv-1000-123456789-111111111;nu-direnv-1000-123456789-222222222"
+let nu_direnv_overlay_modules = ["nu-direnv-1000-123456789-111111111" "nu-direnv-1000-123456789-222222222" ]
+$env.NU_DIRENV_OVERLAY_EXPORTS = (
+  scope modules
+  | where {|module| $module.name in $nu_direnv_overlay_modules }
+  | each {|module|
+      ($module.commands | get name)
+      ++ ($module.aliases | get name)
+      ++ ($module.externs | get name)
+      ++ ($module.constants | get name)
+      ++ ($module.submodules | get name)
+    }
+  | flatten
+  | uniq
+  | str join (char us)
+)
 ```
 
 Internally, the actual Nushell overlay names are derived from the project path
@@ -105,6 +120,25 @@ and each overlay file path, using `nu-direnv-<uid>-<project-checksum>-<file-chec
 This avoids user-managed names and lets cleanup hide only overlays created by
 this tool. Exported commands keep their original names; for example,
 `overlay/task.nu` can still expose `build`.
+
+The generated `apply.nu` only loads the new overlays and records the exported
+definition names. Cleanup is generated in the parent Nushell session as a
+per-session wrapper, because only that session can see and mutate the active
+interactive overlays:
+
+```nu
+if ((overlay list | where name == "nu-direnv-1000-123456789-111111111" and active == true | is-not-empty)) { overlay hide --keep-env [ PWD ] "nu-direnv-1000-123456789-111111111" }
+hide "build"
+hide "project_name"
+$env.NU_DIRENV_OVERLAY_ACTIVE = ""
+$env.NU_DIRENV_OVERLAY_EXPORTS = ""
+```
+
+`overlay hide --keep-env [ PWD ]` keeps `cd` from being rolled back when an
+overlay has changed environment state. Nushell can also leave exported
+definitions visible after an overlay becomes inactive, so
+`NU_DIRENV_OVERLAY_EXPORTS` tracks exported commands, aliases, externs,
+constants, and submodules and hides those names during cleanup.
 
 ## Security Model
 
@@ -119,10 +153,10 @@ that variable as trusted output from the allowed `.envrc`.
 
 ## Notes on Nushell
 
-Nushell `source` and `overlay use` are parser keywords, so they cannot freely
-consume ordinary runtime variables as file paths or overlay names. For that
-reason, direnv generates a literal `apply.nu` file, and the Nushell hook sources
-that file through a per-session wrapper.
+Nushell `source`, `overlay use`, `overlay hide`, and `hide` are parser
+keywords, so they cannot freely consume ordinary runtime variables as file
+paths or names. For that reason, direnv and the Nushell hook generate literal
+Nushell files with the paths and names already written into the source code.
 
 The package installs its Nushell integration in
 `share/nushell/vendor/autoload`, which is Nushell's vendor/package-manager

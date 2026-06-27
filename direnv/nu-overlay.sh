@@ -57,7 +57,15 @@ __nu_direnv_overlay_print_export_tracking() {
 $env.NU_DIRENV_OVERLAY_EXPORTS = (
   scope modules
   | where {|module| $module.name in $nu_direnv_overlay_modules }
-  | each {|module| (($module.commands | get name) ++ ($module.aliases | get name) ++ ($module.externs | get name)) }
+  | each {|module|
+      (
+        ($module.commands | get name)
+        ++ ($module.aliases | get name)
+        ++ ($module.externs | get name)
+        ++ ($module.constants | get name)
+        ++ ($module.submodules | get name)
+      )
+    }
   | flatten
   | uniq
   | str join (char us)

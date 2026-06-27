@@ -24,8 +24,12 @@ def "__nu-direnv-overlay log" [event: string, data?: any] {
   } | to nuon | $"($in)\n" | save --append --force $path
 }
 
-def --env "__nu-direnv-overlay write-source" [] {
-  let apply = ($env.DIRENV_NU_OVERLAY_APPLY? | default "")
+def --env "__nu-direnv-overlay write-source" [--clear-apply] {
+  let apply = if $clear_apply {
+    ""
+  } else {
+    $env.DIRENV_NU_OVERLAY_APPLY? | default ""
+  }
   let tracked = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
   let active = (overlay list | where name =~ '^nu-direnv-' and active == true | get name)
   let previous = ($tracked ++ $active | uniq)
@@ -145,7 +149,7 @@ def --env "__nu-direnv-overlay export-direnv" [--force] {
 
   if ($exported.stdout | str trim | is-empty) {
     hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
-    __nu-direnv-overlay write-source
+    __nu-direnv-overlay write-source --clear-apply
     __nu-direnv-overlay install-source-hook
     __nu-direnv-overlay log "export-end-empty" {
       status: (nu-direnv-overlay status)

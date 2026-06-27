@@ -152,6 +152,11 @@
             cat "$stale_cleanup" >&2
             exit 1
           fi
+          if grep -q '^source ' "$stale_cleanup"; then
+            echo "cleanup unexpectedly re-sourced an old apply file" >&2
+            cat "$stale_cleanup" >&2
+            exit 1
+          fi
 
           cat > "$TMPDIR/stale-cleanup-test.nu" <<EOF
           const apply = '$reloaded_apply'

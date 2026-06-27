@@ -57,11 +57,6 @@
           ${pkgs.nushell}/bin/nu --no-config-file --commands '
             source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
             $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
-            __nu-direnv-overlay install-pwd-hook
-            __nu-direnv-overlay install-pwd-hook
-            if (($env.config.hooks.env_change.PWD | length) != 2) {
-              error make { msg: "PWD hook was not deduplicated" }
-            }
             __nu-direnv-overlay install-prompt-hooks
             __nu-direnv-overlay install-prompt-hooks
             let prompt_hooks = ($env.config.hooks.pre_prompt | last 2)
@@ -160,9 +155,7 @@
               $env.config.hooks.env_change = { PWD: [{|before, after| null }] }
               $env.PATH = ($env.PATH | prepend "${pkgs.direnv}/bin")
               source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
-              __nu-direnv-overlay install-pwd-hook
               direnv export json | from json | load-env
-              __nu-direnv-overlay on-pwd "/tmp" "'"$TMPDIR/project"'"
               __nu-direnv-overlay prompt-sync
               $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
             '

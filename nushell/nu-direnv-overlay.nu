@@ -86,39 +86,13 @@ def --env "__nu-direnv-overlay install-prompt-hooks" [] {
   $env.config.hooks.pre_prompt = ($hooks | append $overlay_sync_command | append $overlay_source_command)
 }
 
-def --env "__nu-direnv-overlay install-pwd-hook" [] {
-  if (($env.__NU_DIRENV_OVERLAY_PWD_HOOK_INSTALLED? | default "") == "1") {
-    return
-  }
-
-  let env_change = ($env.config.hooks.env_change? | default {})
-  let pwd_hooks = ($env_change.PWD? | default [])
-  let hook = {|before, after| __nu-direnv-overlay on-pwd $before $after }
-
-  $env.config.hooks.env_change = ($env_change | upsert PWD ($pwd_hooks | append $hook))
-  $env.__NU_DIRENV_OVERLAY_PWD_HOOK_INSTALLED = "1"
-}
-
-def --env "__nu-direnv-overlay request-sync" [] {
-  $env.__NU_DIRENV_OVERLAY_SYNC_PENDING = "1"
-}
-
 def --env "__nu-direnv-overlay sync-overlays" [] {
   __nu-direnv-overlay write-source
   __nu-direnv-overlay install-prompt-hooks
 }
 
 def --env "__nu-direnv-overlay prompt-sync" [] {
-  if (($env.__NU_DIRENV_OVERLAY_SYNC_PENDING? | default "") != "1") {
-    return
-  }
-
-  hide-env __NU_DIRENV_OVERLAY_SYNC_PENDING --ignore-errors
   __nu-direnv-overlay sync-overlays
-}
-
-def --env "__nu-direnv-overlay on-pwd" [before?: string, after?: string] {
-  __nu-direnv-overlay request-sync
 }
 
 export def --env "nu-direnv-overlay status" [] {
@@ -131,14 +105,11 @@ export def --env "nu-direnv-overlay status" [] {
 }
 
 export def --env "nu-direnv-overlay reload" [] {
-  __nu-direnv-overlay request-sync
-  __nu-direnv-overlay prompt-sync
+  __nu-direnv-overlay sync-overlays
 }
 
 if $nu.is-interactive {
   # Official Nushell hooks only run in interactive sessions. That is exactly
   # where overlays matter, so non-interactive `nu -c` and scripts stay inert.
-  __nu-direnv-overlay install-pwd-hook
   __nu-direnv-overlay install-prompt-hooks
-  __nu-direnv-overlay request-sync
 }

@@ -157,6 +157,16 @@
             cat "$stale_cleanup" >&2
             exit 1
           fi
+          if ! grep -q 'hide "build"' "$stale_cleanup"; then
+            echo "cleanup did not hide build command" >&2
+            cat "$stale_cleanup" >&2
+            exit 1
+          fi
+          if ! grep -q 'hide "st"' "$stale_cleanup"; then
+            echo "cleanup did not hide st command" >&2
+            cat "$stale_cleanup" >&2
+            exit 1
+          fi
 
           cat > "$TMPDIR/stale-cleanup-test.nu" <<EOF
           const apply = '$reloaded_apply'
@@ -166,6 +176,9 @@
           source \$cleanup
           if \$env.PWD != "$TMPDIR" {
             error make { msg: "cleanup changed PWD while hiding overlay" }
+          }
+          if ((scope commands | where name in [build st] | is-not-empty)) {
+            error make { msg: "overlay commands remained visible after cleanup" }
           }
           if ((overlay list | where name =~ '^nu-direnv-' and active == true | is-not-empty)) {
             error make { msg: "nu-direnv overlay remained active after stale cleanup" }

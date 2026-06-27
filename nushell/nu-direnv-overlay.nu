@@ -31,6 +31,7 @@ def --env "__nu-direnv-overlay write-source" [--clear-apply] {
     $env.DIRENV_NU_OVERLAY_APPLY? | default ""
   }
   let tracked = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+  let tracked_exports = ($env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != "")
   let active = (overlay list | where name =~ '^nu-direnv-' and active == true | get name)
   let previous = ($tracked ++ $active | uniq)
   let hide_lines = (
@@ -40,6 +41,13 @@ def --env "__nu-direnv-overlay write-source" [--clear-apply] {
         $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ PWD ] ($quoted) }"
       }
   )
+  let hide_export_lines = (
+    $tracked_exports
+    | each {|name|
+        let quoted = (__nu-direnv-overlay quote $name)
+        $"hide ($quoted)"
+      }
+  )
   let source_start_line = 'if ((which "__nu-direnv-overlay log" | is-not-empty)) { __nu-direnv-overlay log "source-wrapper-start" { active: (overlay list | where name =~ "^nu-direnv-" and active == true), env_active: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default null), apply: ($env.DIRENV_NU_OVERLAY_APPLY? | default null) } }'
   let source_end_line = 'if ((which "__nu-direnv-overlay log" | is-not-empty)) { __nu-direnv-overlay log "source-wrapper-end" { active: (overlay list | where name =~ "^nu-direnv-" and active == true), env_active: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default null), apply: ($env.DIRENV_NU_OVERLAY_APPLY? | default null) } }'
 
@@ -47,13 +55,14 @@ def --env "__nu-direnv-overlay write-source" [--clear-apply] {
   # This per-session wrapper gives Nushell a stable path to source from the
   # pre_prompt string hook, while its contents can change after every direnv run.
   let body = if ($apply != "" and ($apply | path exists)) {
-    ($hide_lines ++ [$source_start_line $"source ((__nu-direnv-overlay quote $apply))" $source_end_line] | str join (char newline))
+    ($hide_lines ++ $hide_export_lines ++ [$source_start_line $"source ((__nu-direnv-overlay quote $apply))" $source_end_line] | str join (char newline))
   } else {
     # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
     # cannot produce an apply file for the old overlays, so Nushell generates
     # a small cleanup script from tracked and currently active overlay names.
     let active_line = '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
-    ($hide_lines ++ [$source_start_line $active_line $source_end_line] | str join (char newline))
+    let exports_line = '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
+    ($hide_lines ++ $hide_export_lines ++ [$source_start_line $active_line $exports_line $source_end_line] | str join (char newline))
   }
 
   mkdir ($overlay_source | path dirname)
@@ -63,9 +72,11 @@ def --env "__nu-direnv-overlay write-source" [--clear-apply] {
     apply: $apply
     apply_exists: ($apply != "" and ($apply | path exists))
     tracked: $tracked
+    tracked_exports: $tracked_exports
     active: $active
     previous: $previous
     hide_lines: $hide_lines
+    hide_export_lines: $hide_export_lines
     body: $body
   }
 }
@@ -176,6 +187,7 @@ export def --env "nu-direnv-overlay status" [] {
     source: $overlay_source
     apply: ($env.DIRENV_NU_OVERLAY_APPLY? | default null)
     active: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+    exports: ($env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != "")
   }
 }
 

@@ -54,6 +54,16 @@
           ${pkgs.nushell}/bin/nu --no-config-file --commands \
             'source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"; nu-direnv-overlay status | ignore'
 
+          ${pkgs.nushell}/bin/nu --no-config-file --commands '
+            source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+            $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
+            __nu-direnv-overlay install-pwd-hook
+            __nu-direnv-overlay install-pwd-hook
+            if (($env.config.hooks.env_change.PWD | length) != 2) {
+              error make { msg: "PWD hook was not deduplicated" }
+            }
+          '
+
           printf 'source %q\n' "$pkg/share/direnv/lib/nu-overlay.sh" > "$XDG_CONFIG_HOME/direnv/direnvrc"
           mkdir -p "$TMPDIR/project/overlay"
           cat > "$TMPDIR/project/.envrc" <<'EOF'

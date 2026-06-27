@@ -82,6 +82,19 @@ def --env "__nu-direnv-overlay install-source-hook" [] {
   }
 }
 
+def --env "__nu-direnv-overlay install-pwd-hook" [] {
+  if (($env.__NU_DIRENV_OVERLAY_PWD_HOOK_INSTALLED? | default "") == "1") {
+    return
+  }
+
+  let env_change = ($env.config.hooks.env_change? | default {})
+  let pwd_hooks = ($env_change.PWD? | default [])
+  let hook = {|before, after| __nu-direnv-overlay on-pwd $before $after }
+
+  $env.config.hooks.env_change = ($env_change | upsert PWD ($pwd_hooks | append $hook))
+  $env.__NU_DIRENV_OVERLAY_PWD_HOOK_INSTALLED = "1"
+}
+
 def "__nu-direnv-overlay has-active-overlays" [] {
   let active = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
   if ($active | is-empty) {
@@ -157,10 +170,6 @@ export def --env "nu-direnv-overlay reload" [] {
 if $nu.is-interactive {
   # Official Nushell hooks only run in interactive sessions. That is exactly
   # where overlays matter, so non-interactive `nu -c` and scripts stay inert.
-  let env_change = ($env.config.hooks.env_change? | default {})
-  let pwd_hooks = ($env_change.PWD? | default [])
-  let hook = {|before, after| __nu-direnv-overlay on-pwd $before $after }
-
-  $env.config.hooks.env_change = ($env_change | upsert PWD ($pwd_hooks | append $hook))
+  __nu-direnv-overlay install-pwd-hook
   __nu-direnv-overlay export-direnv
 }

@@ -147,7 +147,7 @@
               $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
             '
           )
-          if ! grep -q 'overlay hide "nu-direnv-' "$stale_cleanup"; then
+          if ! grep -q 'overlay hide --keep-env \[ PWD \] "nu-direnv-' "$stale_cleanup"; then
             echo "cleanup did not include active nu-direnv overlay" >&2
             cat "$stale_cleanup" >&2
             exit 1
@@ -157,7 +157,11 @@
           const apply = '$reloaded_apply'
           const cleanup = '$stale_cleanup'
           source \$apply
+          cd "$TMPDIR"
           source \$cleanup
+          if \$env.PWD != "$TMPDIR" {
+            error make { msg: "cleanup changed PWD while hiding overlay" }
+          }
           if ((overlay list | where name =~ '^nu-direnv-' and active == true | is-not-empty)) {
             error make { msg: "nu-direnv overlay remained active after stale cleanup" }
           }

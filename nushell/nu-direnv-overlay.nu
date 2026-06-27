@@ -17,7 +17,7 @@ def --env "__nu-direnv-overlay write-source" [] {
     $previous
     | each {|name|
         let quoted = (__nu-direnv-overlay quote $name)
-        $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide ($quoted) }"
+        $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ PWD ] ($quoted) }"
       }
   )
 

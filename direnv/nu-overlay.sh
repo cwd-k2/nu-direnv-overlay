@@ -57,7 +57,7 @@ __nu_direnv_overlay_generate_apply() {
     for previous_name in "${previous[@]}"; do
       [[ -z $previous_name ]] && continue
       quoted_name=$(__nu_direnv_overlay_quote_nu "$previous_name")
-      printf 'if ((overlay list | where name == %s and active == true | is-not-empty)) { overlay hide %s }\n' "$quoted_name" "$quoted_name"
+      printf 'if ((overlay list | where name == %s and active == true | is-not-empty)) { overlay hide --keep-env [ PWD ] %s }\n' "$quoted_name" "$quoted_name"
     done
 
     local i

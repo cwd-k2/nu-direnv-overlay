@@ -77,7 +77,14 @@ __nu_direnv_overlay_generate_apply() {
       printf '%s ' "$(__nu_direnv_overlay_quote_nu "$name")"
     done
     printf ']\n'
-    printf '$env.NU_DIRENV_OVERLAY_EXPORTS = (scope modules | where {|module| $module.name in $nu_direnv_overlay_modules } | each {|module| (($module.commands | get name) ++ ($module.aliases | get name) ++ ($module.externs | get name)) } | flatten | uniq | str join (char us))\n'
+    printf '$env.NU_DIRENV_OVERLAY_EXPORTS = (\n'
+    printf '  scope modules\n'
+    printf '  | where {|module| $module.name in $nu_direnv_overlay_modules }\n'
+    printf '  | each {|module| (($module.commands | get name) ++ ($module.aliases | get name) ++ ($module.externs | get name)) }\n'
+    printf '  | flatten\n'
+    printf '  | uniq\n'
+    printf '  | str join (char us)\n'
+    printf ')\n'
   } >"$apply"
 
   export DIRENV_NU_OVERLAY_APPLY="$apply"

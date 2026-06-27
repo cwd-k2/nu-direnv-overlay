@@ -90,6 +90,52 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/apply-test.nu"
 
+          (
+            cd "$TMPDIR/project"
+            ${pkgs.direnv}/bin/direnv export json > "$TMPDIR/inherited.json"
+          )
+          cat > "$TMPDIR/inherited-reload.nu" <<EOF
+          open "$TMPDIR/inherited.json" | load-env
+          \$env.PATH = (\$env.PATH | prepend "${pkgs.direnv}/bin")
+          source "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+          __nu-direnv-overlay export-direnv
+          nu-direnv-overlay status | get apply
+          EOF
+          hook_apply=$(
+            cd "$TMPDIR/project"
+            ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/inherited-reload.nu"
+          )
+          test -f "$hook_apply"
+
+          cat > "$TMPDIR/hook-apply-test.nu" <<EOF
+          const apply = '$hook_apply'
+          source \$apply
+          if (build) != "built" { error make { msg: "build command did not reload from inherited direnv state in hook path" } }
+          if (st) != "status" { error make { msg: "st command did not reload from inherited direnv state in hook path" } }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/hook-apply-test.nu"
+
+          cat > "$TMPDIR/inherited-force-reload.nu" <<EOF
+          open "$TMPDIR/inherited.json" | load-env
+          \$env.PATH = (\$env.PATH | prepend "${pkgs.direnv}/bin")
+          source "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+          nu-direnv-overlay reload
+          nu-direnv-overlay status | get apply
+          EOF
+          reloaded_apply=$(
+            cd "$TMPDIR/project"
+            ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/inherited-force-reload.nu"
+          )
+          test -f "$reloaded_apply"
+
+          cat > "$TMPDIR/reloaded-apply-test.nu" <<EOF
+          const apply = '$reloaded_apply'
+          source \$apply
+          if (build) != "built" { error make { msg: "build command did not reload from inherited direnv state" } }
+          if (st) != "status" { error make { msg: "st command did not reload from inherited direnv state" } }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/reloaded-apply-test.nu"
+
           touch "$out"
         '';
       }

@@ -45,13 +45,47 @@ def --env "__nu-direnv-overlay install-source-hook" [] {
   }
 }
 
-def --env "__nu-direnv-overlay export-direnv" [] {
-  # Match direnv's shell hook model: ask direnv for the environment diff, load
+def "__nu-direnv-overlay has-active-overlays" [] {
+  let active = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+  if ($active | is-empty) {
+    false
+  } else {
+    $active | all {|name|
+      overlay list | where name == $name and active == true | is-not-empty
+    }
+  }
+}
+
+def --env "__nu-direnv-overlay clear-direnv-state" [] {
+  hide-env DIRENV_DIFF --ignore-errors
+  hide-env DIRENV_DIR --ignore-errors
+  hide-env DIRENV_FILE --ignore-errors
+  hide-env DIRENV_WATCHES --ignore-errors
+  hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+}
+
+def --env "__nu-direnv-overlay export-direnv" [--force] {
+  # Match the direnv shell hook model: ask direnv for the environment diff, load
   # that diff into this shell, then apply the Nushell-only overlay changes.
-  let exported = (direnv export json | complete)
+  if $force {
+    __nu-direnv-overlay clear-direnv-state
+  }
+
+  mut exported = (direnv export json | complete)
   if $exported.exit_code != 0 {
     print --stderr ($exported.stderr | str trim)
     return
+  }
+
+  if ($exported.stdout | str trim | is-empty) {
+    if (not $force) and (($env.DIRENV_DIR? | default "") != "") and (not (__nu-direnv-overlay has-active-overlays)) {
+      __nu-direnv-overlay clear-direnv-state
+      $exported = (direnv export json | complete)
+      if $exported.exit_code != 0 {
+        print --stderr ($exported.stderr | str trim)
+        return
+      }
+    }
   }
 
   if ($exported.stdout | str trim | is-empty) {
@@ -79,7 +113,7 @@ export def --env "nu-direnv-overlay status" [] {
 }
 
 export def --env "nu-direnv-overlay reload" [] {
-  __nu-direnv-overlay export-direnv
+  __nu-direnv-overlay export-direnv --force
 }
 
 if $nu.is-interactive {

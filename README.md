@@ -140,6 +140,12 @@ definitions visible after an overlay becomes inactive, so
 `NU_DIRENV_OVERLAY_EXPORTS` tracks exported commands, aliases, externs,
 constants, and submodules and hides those names during cleanup.
 
+Cleanup hides exported definitions by name. In normal use those names come from
+the project overlay, but if you manually define another command, alias, extern,
+constant, or module with the same name in the same interactive scope, cleanup
+can hide that manual definition too. Prefer distinct names for ad-hoc shell
+definitions when they overlap with project overlay exports.
+
 ## Security Model
 
 `nu-direnv-overlay` follows direnv's trust model: only run `direnv allow` in

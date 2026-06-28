@@ -118,6 +118,7 @@ run_nu "$TMPDIR/apply-test.nu"
 (
   cd "$TMPDIR/project"
   "$DIRENV" export json >"$TMPDIR/inherited.json"
+  "$DIRENV" export json >"$TMPDIR/inherited-again.json"
 )
 (
   cd "$TMPDIR/project-b"
@@ -221,6 +222,39 @@ if \$env.PWD != "$TMPDIR/project" {
 }
 EOF
 run_nu "$TMPDIR/command-cd-prompt-test.nu"
+
+# Some direnv hooks re-evaluate on prompt, so the same project can receive a new
+# apply file path after a command has changed PWD. That must not roll the command
+# driven directory change back to the overlay activation directory.
+changed_apply_after_cd_wrapper=$(
+  run_nu --commands '
+    source "'"$autoload"'"
+    open "'"$TMPDIR/inherited.json"'" | load-env
+    const apply = "'"$reloaded_apply"'"
+    source $apply
+    cd "'"$TMPDIR"'"
+    jump root
+    open "'"$TMPDIR/inherited-again.json"'" | load-env
+    __nu-direnv-overlay write-source
+    '"$wrapper_path"'
+  '
+)
+cat >"$TMPDIR/changed-apply-after-cd-test.nu" <<EOF
+const apply = '$reloaded_apply'
+const wrapper = '$changed_apply_after_cd_wrapper'
+source "$autoload"
+open "$TMPDIR/inherited.json" | load-env
+source \$apply
+cd "$TMPDIR"
+jump root
+open "$TMPDIR/inherited-again.json" | load-env
+source \$wrapper
+if \$env.PWD != "$TMPDIR/project" {
+  error make { msg: "changed apply after command cd changed PWD" }
+}
+$assert_project_commands
+EOF
+run_nu "$TMPDIR/changed-apply-after-cd-test.nu"
 
 # Direct project-to-project movement is different from leaving to an unmanaged
 # directory: cleanup for project A runs while direnv has already loaded project

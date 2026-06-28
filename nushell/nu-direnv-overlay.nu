@@ -59,17 +59,38 @@ def "__nu-direnv-overlay exported-names" [] {
   $tracked ++ $scoped | uniq
 }
 
-def "__nu-direnv-overlay hide-overlay-line" [name: string] {
+def "__nu-direnv-overlay current-env-literal" [] {
+  # Capture the current post-direnv environment at wrapper generation time.
+  # Generated cleanup uses this literal record after `overlay hide` to remove
+  # names resurrected from the overlay activation environment, then restore the
+  # captured values. Same-named variables from different projects are therefore
+  # compared by the current snapshot, not by the overlay being hidden.
+  $env
+  | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV
+  | to nuon
+}
+
+def "__nu-direnv-overlay current-env-names-literal" [] {
+  # Keep a separate literal name list so generated cleanup does not need local
+  # bookkeeping variables or repeated record introspection.
+  $env
+  | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV
+  | columns
+  | to nuon
+}
+
+def "__nu-direnv-overlay hide-overlay-line" [name: string, keep_env: string, keep_names: string] {
   let quoted = (__nu-direnv-overlay quote $name)
   # `overlay hide` restores the environment that existed when the overlay was
   # activated, except for names listed in --keep-env. Project overlays are loaded
   # after direnv has entered a dev shell, so a plain hide can resurrect Nix env
-  # after direnv has unloaded it. Preserve the current env in a temporary env var,
-  # hide the overlay while keeping PWD and that temporary var, remove any env
-  # names resurrected by `overlay hide`, then load the saved env back. Do not
-  # load automatic/special values: Nushell rejects PWD, FILE_PWD, and
-  # CURRENT_FILE, and loading `config` can disturb completions.
-  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_KEEP_ENV = \($env | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_RESTORE_NAMES\); $env.__NU_DIRENV_OVERLAY_KEEP_NAMES = \($env.__NU_DIRENV_OVERLAY_KEEP_ENV | columns\); overlay hide --keep-env [ PWD __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES ] ($quoted); $env.__NU_DIRENV_OVERLAY_RESTORE_NAMES = \($env | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_RESTORE_NAMES | columns | where {|name| $name not-in $env.__NU_DIRENV_OVERLAY_KEEP_NAMES }\); for name in $env.__NU_DIRENV_OVERLAY_RESTORE_NAMES { hide-env $name --ignore-errors }; load-env $env.__NU_DIRENV_OVERLAY_KEEP_ENV; hide-env __NU_DIRENV_OVERLAY_KEEP_ENV --ignore-errors; hide-env __NU_DIRENV_OVERLAY_KEEP_NAMES --ignore-errors; hide-env __NU_DIRENV_OVERLAY_RESTORE_NAMES --ignore-errors }"
+  # after direnv has unloaded it. Generated cleanup embeds the current
+  # post-direnv env record and its name list as literals. After hiding the
+  # overlay, it removes names outside that list, then restores the literal record.
+  # PWD stays controlled by Nushell's current directory, and automatic/special
+  # values are excluded because Nushell rejects PWD/FILE_PWD/CURRENT_FILE and
+  # loading `config` can disturb completions.
+  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ PWD ] ($quoted); for name in \($env | reject --optional PWD FILE_PWD CURRENT_FILE config | columns\) { if $name not-in ($keep_names) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
 }
 
 def "__nu-direnv-overlay hide-export-line" [name: string] {
@@ -82,7 +103,9 @@ def "__nu-direnv-overlay hide-export-line" [name: string] {
 def "__nu-direnv-overlay cleanup-lines" [] {
   # Ordering matters. Hide overlays first so their env layer is removed, then
   # hide exported definitions that Nushell may otherwise leave in scope.
-  let hide_overlays = (__nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name })
+  let keep_env = (__nu-direnv-overlay current-env-literal)
+  let keep_names = (__nu-direnv-overlay current-env-names-literal)
+  let hide_overlays = (__nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name $keep_env $keep_names })
   let hide_exports = (__nu-direnv-overlay exported-names | each {|name| __nu-direnv-overlay hide-export-line $name })
   $hide_overlays ++ $hide_exports
 }

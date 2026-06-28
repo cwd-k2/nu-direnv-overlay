@@ -62,6 +62,7 @@ run_nu --commands '
 printf 'source %q\n' "$direnv_lib" >"$XDG_CONFIG_HOME/direnv/direnvrc"
 mkdir -p "$TMPDIR/project/overlay"
 cat >"$TMPDIR/project/.envrc" <<'EOF'
+export PROJECT_ROOT="$PWD"
 use nu-overlay overlay/task.nu
 use nu-overlay overlay/git.nu
 EOF
@@ -69,6 +70,7 @@ cat >"$TMPDIR/project/overlay/task.nu" <<'EOF'
 export const project_name = "project"
 export module nested { export def hi [] { "hi" } }
 export def build [] { "built" }
+export def --env "jump root" [] { cd $env.PROJECT_ROOT }
 EOF
 cat >"$TMPDIR/project/overlay/git.nu" <<'EOF'
 export def st [] { "status" }
@@ -195,6 +197,30 @@ if ((nu-direnv-overlay status | get active | length) != 2) {
 }
 EOF
 run_nu "$TMPDIR/same-project-wrapper-test.nu"
+
+# A setup-style command may `cd` to a repository root before returning to the
+# prompt. The following prompt sync must not restore the directory that was
+# current when the overlay originally loaded.
+cat >"$TMPDIR/command-cd-prompt-test.nu" <<EOF
+const apply = '$reloaded_apply'
+source "$autoload"
+open "$TMPDIR/inherited.json" | load-env
+source \$apply
+cd "$TMPDIR"
+jump root
+if \$env.PWD != "$TMPDIR/project" {
+  error make { msg: "overlay command did not cd to project root" }
+}
+__nu-direnv-overlay write-source
+let wrapper = (\$nu.temp-dir | path join $"nu-direnv-overlay-(\$nu.pid).nu")
+if ((ls \$wrapper | get size.0 | into int) != 0) {
+  error make { msg: "prompt sync after command cd was not a no-op" }
+}
+if \$env.PWD != "$TMPDIR/project" {
+  error make { msg: "prompt sync after command cd changed PWD" }
+}
+EOF
+run_nu "$TMPDIR/command-cd-prompt-test.nu"
 
 # Direct project-to-project movement is different from leaving to an unmanaged
 # directory: cleanup for project A runs while direnv has already loaded project

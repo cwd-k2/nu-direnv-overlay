@@ -135,6 +135,11 @@ __nu_direnv_overlay_generate_apply() {
       active+="$name"
     done
     printf '$env.NU_DIRENV_OVERLAY_ACTIVE = %s\n' "$(__nu_direnv_overlay_quote_nu "$active")"
+    # The parent prompt hook runs repeatedly while the user stays in one
+    # directory. This marker lets it skip cleanup+source when this exact apply
+    # file is already active, which avoids hiding exported commands out from
+    # under an active module.
+    printf '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = %s\n' "$(__nu_direnv_overlay_quote_nu "$apply")"
     __nu_direnv_overlay_print_export_tracking
   } >"$apply"
 

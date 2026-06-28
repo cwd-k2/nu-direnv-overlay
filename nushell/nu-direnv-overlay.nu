@@ -93,7 +93,27 @@ def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
   (__nu-direnv-overlay cleanup-lines) ++ [
     '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
     '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
+    '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""'
   ]
+}
+
+def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
+  # pre_prompt runs on every Enter. Re-hiding exported commands and then sourcing
+  # the exact same overlay can leave Nushell with commands hidden while their
+  # module is active. If the same apply file is already loaded and the active
+  # nu-direnv overlay set exactly matches what that apply file tracks, the
+  # correct wrapper is a no-op.
+  if ($apply == "" or (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != $apply)) {
+    return false
+  }
+
+  let tracked = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "" | uniq | sort)
+  if ($tracked | is-empty) {
+    return false
+  }
+
+  let active = (overlay list | where name =~ '^nu-direnv-' and active == true | get name | uniq | sort)
+  $tracked == $active
 }
 
 def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
@@ -102,7 +122,9 @@ def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
   # direnv generates the real apply file while evaluating the allowed .envrc.
   # This per-session wrapper gives Nushell a stable path to source from the
   # pre_prompt string hook, while its contents can change after every direnv run.
-  let body = if ($apply != "" and ($apply | path exists)) {
+  let body = if (__nu-direnv-overlay apply-already-loaded $apply) {
+    []
+  } else if ($apply != "" and ($apply | path exists)) {
     __nu-direnv-overlay apply-wrapper-lines $apply
   } else {
     # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv

@@ -191,6 +191,37 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/reloaded-apply-test.nu"
 
+          # Repeated prompt syncs inside the same project must be a no-op after
+          # the apply file is already active. Hiding and re-sourcing the same
+          # internal overlay can leave Nushell reporting the module as active
+          # while exported commands are hidden and unusable.
+          same_project_wrapper=$(
+            ${pkgs.nushell}/bin/nu --no-config-file --commands '
+              source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+              open "'"$TMPDIR/inherited.json"'" | load-env
+              const apply = "'"$reloaded_apply"'"
+              source $apply
+              __nu-direnv-overlay write-source
+              $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
+            '
+          )
+          test -f "$same_project_wrapper"
+          test ! -s "$same_project_wrapper"
+          cat > "$TMPDIR/same-project-wrapper-test.nu" <<EOF
+          const apply = '$reloaded_apply'
+          const wrapper = '$same_project_wrapper'
+          source "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+          open "$TMPDIR/inherited.json" | load-env
+          source \$apply
+          source \$wrapper
+          if (build) != "built" { error make { msg: "same-project prompt sync hid build command" } }
+          if (st) != "status" { error make { msg: "same-project prompt sync hid st command" } }
+          if ((nu-direnv-overlay status | get active | length) != 2) {
+            error make { msg: "unexpected active overlay count after same-project no-op" }
+          }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/same-project-wrapper-test.nu"
+
           # Direct project-to-project movement is different from leaving to an
           # unmanaged directory: cleanup for project A runs while direnv has
           # already loaded project B's environment and apply path. A cleanup must

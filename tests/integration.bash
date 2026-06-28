@@ -41,49 +41,48 @@ type use_nu-overlay >/dev/null
 # Ensure the Nushell-side autoload file can be sourced in a clean shell.
 run_nu --commands 'source "'"$autoload"'"; nu-direnv-overlay status | ignore'
 
-# Prompt hook installation must be idempotent. The sync and source hooks are
-# installed adjacent to each other so the source hook sees freshly written
-# wrapper contents.
+# Hook installation must be idempotent. The pre_execution sync and source hooks
+# are installed adjacent to each other so the source hook sees freshly written
+# wrapper contents before the user's command resolves.
 run_nu --commands '
   source "'"$autoload"'"
   $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
   let wrapper = ($nu.cache-dir | path join "nu-direnv-overlay" $"($nu.pid).nu")
-  let legacy_wrapper = ($nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu")
   let sq = (char -i 39)
+  $env.config.hooks.pre_execution = [
+    "existing pre-exec"
+    "__nu-direnv-overlay pre-execution-sync"
+    $"source ($sq)($wrapper)($sq)"
+  ]
   mkdir ($wrapper | path dirname)
   "error make { msg: \"stale wrapper was sourced\" }" | save --force $wrapper
-  $env.config.hooks.pre_prompt = [
-    "existing hook"
-    $"__nu-direnv-overlay prompt-sync; source ($sq)($legacy_wrapper)($sq)"
-    "__nu-direnv-overlay prompt-sync"
-    $"source ($sq)($legacy_wrapper)($sq)"
-  ]
-  __nu-direnv-overlay install-prompt-hooks
-  __nu-direnv-overlay install-prompt-hooks
-  let hooks = ($env.config.hooks.pre_prompt | last 2)
-  if "existing hook" not-in $env.config.hooks.pre_prompt {
-    error make { msg: "unrelated prompt hook was removed" }
+  $env.config.hooks.pre_prompt = ["existing hook"]
+  __nu-direnv-overlay install-pre-execution-hooks
+  __nu-direnv-overlay install-pre-execution-hooks
+  let pre_exec_hooks = ($env.config.hooks.pre_execution | last 2)
+  if "existing pre-exec" not-in $env.config.hooks.pre_execution {
+    error make { msg: "unrelated pre-execution hook was removed" }
   }
-  if ($env.config.hooks.pre_prompt | where {|hook| $hook =~ "nu-direnv-overlay-"} | is-not-empty) {
-    error make { msg: "legacy tmp prompt hook was not removed" }
+  if $pre_exec_hooks.0 != "__nu-direnv-overlay pre-execution-sync" {
+    error make { msg: "pre-execution sync hook was not installed before source hook" }
   }
-  if $hooks.0 != "__nu-direnv-overlay prompt-sync" {
-    error make { msg: "prompt sync hook was not installed before source hook" }
+  if (($pre_exec_hooks.1 | str starts-with "source ") != true) {
+    error make { msg: "pre-execution source hook was not installed after sync hook" }
   }
-  if (($hooks.1 | str starts-with "source ") != true) {
-    error make { msg: "prompt source hook was not installed after sync hook" }
+  if (($env.config.hooks.pre_execution | where $it == $pre_exec_hooks.0 | length) != 1) {
+    error make { msg: "pre-execution sync hook installation was not idempotent" }
   }
-  if (($env.config.hooks.pre_prompt | where $it == $hooks.0 | length) != 1) {
-    error make { msg: "prompt hook installation was not idempotent" }
+  if (($env.config.hooks.pre_execution | where $it == $pre_exec_hooks.1 | length) != 1) {
+    error make { msg: "pre-execution source hook installation was not idempotent" }
   }
-  if (($env.config.hooks.pre_prompt | where $it == $hooks.1 | length) != 1) {
-    error make { msg: "prompt source hook installation was not idempotent" }
+  if $env.config.hooks.pre_prompt != ["existing hook"] {
+    error make { msg: "pre-execution install changed prompt hooks" }
   }
   if not ($wrapper | path exists) {
-    error make { msg: "prompt source wrapper was not created before hook installation" }
+    error make { msg: "pre-execution source wrapper was not created before hook installation" }
   }
   if ((open $wrapper) != "") {
-    error make { msg: "stale prompt source wrapper was not reset on install" }
+    error make { msg: "stale pre-execution source wrapper was not reset on install" }
   }
 '
 
@@ -162,7 +161,7 @@ cat >"$TMPDIR/inherited-reload.nu" <<EOF
 open "$TMPDIR/inherited.json" | load-env
 \$env.PATH = (\$env.PATH | prepend "$direnv_bin_dir")
 source "$autoload"
-__nu-direnv-overlay sync-overlays
+__nu-direnv-overlay pre-execution-sync
 nu-direnv-overlay status | get apply
 EOF
 hook_apply=$(
@@ -180,8 +179,8 @@ $assert_project_commands
 EOF
 run_nu "$TMPDIR/hook-apply-test.nu"
 
-# Manual reload is overlay-only: it should resync from current env without
-# calling direnv itself.
+# Manual reload should refresh the current direnv env, rewrite the wrapper, and
+# reinstall hooks.
 cat >"$TMPDIR/inherited-force-reload.nu" <<EOF
 open "$TMPDIR/inherited.json" | load-env
 \$env.PATH = (\$env.PATH | prepend "$direnv_bin_dir")
@@ -202,9 +201,9 @@ $assert_project_commands
 EOF
 run_nu "$TMPDIR/reloaded-apply-test.nu"
 
-# Repeated prompt syncs inside the same project must be a no-op after the apply
-# file is already active. Hiding and re-sourcing the same internal overlay can
-# leave Nushell reporting the module as active while exported commands are
+# Repeated pre-execution syncs inside the same project must be a no-op after the
+# apply file is already active. Hiding and re-sourcing the same internal overlay
+# can leave Nushell reporting the module as active while exported commands are
 # hidden and unusable.
 same_project_wrapper=$(
   run_nu --commands '
@@ -232,8 +231,8 @@ if ((nu-direnv-overlay status | get active | length) != 2) {
 EOF
 run_nu "$TMPDIR/same-project-wrapper-test.nu"
 
-# A setup-style command may `cd` to a repository root before returning to the
-# prompt. The following prompt sync must not restore the directory that was
+# A setup-style command may `cd` to a repository root before the next command.
+# The following pre-execution sync must not restore the directory that was
 # current when the overlay originally loaded.
 cat >"$TMPDIR/command-cd-prompt-test.nu" <<EOF
 const apply = '$reloaded_apply'
@@ -248,17 +247,17 @@ if \$env.PWD != "$TMPDIR/project" {
 __nu-direnv-overlay write-source
 let wrapper = (\$nu.cache-dir | path join "nu-direnv-overlay" $"(\$nu.pid).nu")
 if ((ls \$wrapper | get size.0 | into int) != 0) {
-  error make { msg: "prompt sync after command cd was not a no-op" }
+  error make { msg: "pre-execution sync after command cd was not a no-op" }
 }
 if \$env.PWD != "$TMPDIR/project" {
-  error make { msg: "prompt sync after command cd changed PWD" }
+  error make { msg: "pre-execution sync after command cd changed PWD" }
 }
 EOF
 run_nu "$TMPDIR/command-cd-prompt-test.nu"
 
-# Some direnv hooks re-evaluate on prompt, so the same project can receive a new
-# apply file path after a command has changed PWD. That must not roll the command
-# driven directory change back to the overlay activation directory.
+# The same project can receive a new apply file path after a command has changed
+# PWD. That must not roll the command driven directory change back to the overlay
+# activation directory.
 changed_apply_after_cd_wrapper=$(
   run_nu --commands '
     source "'"$autoload"'"
@@ -322,32 +321,6 @@ if ((nu-direnv-overlay status | get active | length) != 1) {
 EOF
 run_nu "$TMPDIR/project-to-project-test.nu"
 
-# Compatibility case: an existing direnv PWD hook has already loaded env, then
-# prompt-sync writes the wrapper. This guards against consuming DIRENV_DIFF from
-# this project.
-external_hook_source=$(
-  cd "$TMPDIR/project"
-  run_nu --commands '
-    $env.config.hooks.env_change = { PWD: [{|before, after| null }] }
-    $env.PATH = ($env.PATH | prepend "'"$direnv_bin_dir"'")
-    source "'"$autoload"'"
-    direnv export json | from json | load-env
-    __nu-direnv-overlay prompt-sync
-    '"$wrapper_path"'
-  '
-)
-if ! grep -q '^source ' "$external_hook_source"; then
-  echo "external hook compatibility did not source generated apply" >&2
-  cat "$external_hook_source" >&2
-  exit 1
-fi
-cat >"$TMPDIR/external-hook-apply-test.nu" <<EOF
-const source_path = '$external_hook_source'
-source \$source_path
-$assert_project_commands
-EOF
-run_nu "$TMPDIR/external-hook-apply-test.nu"
-
 # Build a cleanup wrapper after simulating a directory leave. This is where
 # stale apply paths and active overlays have historically caused command/env
 # resurrection.
@@ -357,7 +330,6 @@ stale_cleanup=$(
     const apply = "'"$reloaded_apply"'"
     source $apply
     hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
-    hide-env NU_DIRENV_OVERLAY_EXPORTS --ignore-errors
     hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
     hide-env PROJECT_ROOT --ignore-errors
     $env.PROJECT_MARK = "outside"
@@ -421,9 +393,8 @@ if ((overlay list | where name =~ '^nu-direnv-' and active == true | is-not-empt
 EOF
 run_nu "$TMPDIR/stale-cleanup-test.nu"
 
-# Repeated cleanup sources are common because pre_prompt runs on every Enter.
-# They must be idempotent and must not move PWD, even after the user has changed
-# to another unmanaged directory.
+# Repeated cleanup sources must be idempotent and must not move PWD, even after
+# the user has changed to another unmanaged directory.
 mkdir -p "$TMPDIR/elsewhere/deep"
 cat >"$TMPDIR/repeated-pwd-test.nu" <<EOF
 const apply = '$reloaded_apply'
@@ -499,3 +470,36 @@ if (\$env.PROJECT_ROOT? | default "") != "$TMPDIR/project" {
 }
 EOF
 run_nu "$TMPDIR/setup-roundtrip-test.nu"
+
+# Real command-cycle regression for setup -> unmanaged -> setup. The split
+# pre_execution hooks must refresh and source the wrapper before the user's
+# first command after re-enter resolves. This uses nu_repl because it runs the
+# actual hook machinery between input lines.
+mkdir -p "$TMPDIR/repl-home/.config/direnv" "$TMPDIR/repl-home/.cache/nushell/nu-direnv-overlay" "$TMPDIR/repl-setup/overlay" "$TMPDIR/repl-outside"
+printf 'source %q\n' "$direnv_lib" >"$TMPDIR/repl-home/.config/direnv/direnvrc"
+cat >"$TMPDIR/repl-setup/.envrc" <<'EOF'
+export setup_repo_root="$PWD"
+use nu-overlay overlay/task.nu
+EOF
+cat >"$TMPDIR/repl-setup/overlay/task.nu" <<'EOF'
+export def setup_hi [] { "hi" }
+EOF
+(
+  cd "$TMPDIR/repl-setup"
+  HOME="$TMPDIR/repl-home" XDG_CONFIG_HOME="$TMPDIR/repl-home/.config" XDG_DATA_HOME="$TMPDIR/repl-home/.local/share" XDG_CACHE_HOME="$TMPDIR/repl-home/.cache" "$DIRENV" allow . >/dev/null
+)
+repl_wrapper="$TMPDIR/repl-home/.cache/nushell/nu-direnv-overlay/wrapper.nu"
+: >"$repl_wrapper"
+repl_autoload="$TMPDIR/repl-autoload.nu"
+awk -v wrapper="$repl_wrapper" '
+  /^const overlay_source = / { print "const overlay_source = \"" wrapper "\""; next }
+  /if \$nu.is-interactive/ { print "if true {"; next }
+  { print }
+' "$autoload" >"$repl_autoload"
+"$NU" --testbin=nu_repl \
+  '$env.config = { hooks: { pre_prompt: [] pre_execution: [] env_change: { PWD: [] } } }; $env.HOME = "'"$TMPDIR/repl-home"'"; $env.XDG_CONFIG_HOME = "'"$TMPDIR/repl-home/.config"'"; $env.XDG_DATA_HOME = "'"$TMPDIR/repl-home/.local/share"'"; $env.XDG_CACHE_HOME = "'"$TMPDIR/repl-home/.cache"'"; $env.PATH = ("'"$PATH"'" | split row (char esep) | prepend "'"$direnv_bin_dir"'"); $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt | append {|| direnv export json | from json --strict | default {} | items {|key, value| let value = do ({"PATH": {from_string: {|s| $s | split row (char esep) | path expand --no-symlink } to_string: {|v| $v | path expand --no-symlink | str join (char esep) }}} | merge ($env.ENV_CONVERSIONS? | default {}) | get ([[value, optional, insensitive]; [$key, true, true] [from_string, true, false]] | into cell-path) | if ($in | is-empty) { {|x| $x} } else { $in }) $value; return [$key $value] } | into record | load-env }); source "'"$repl_autoload"'"' \
+  'cd "'"$TMPDIR/repl-setup"'"' \
+  'cd "'"$TMPDIR/repl-outside"'"' \
+  'cd "'"$TMPDIR/repl-setup"'"' \
+  'let apply = ($env.DIRENV_NU_OVERLAY_APPLY? | default ""); let root = ($env.setup_repo_root? | default ""); if $apply == "" { error make { msg: "missing apply before first re-enter command" } }; if $root != "'"$TMPDIR/repl-setup"'" { error make { msg: "missing setup root before first re-enter command" } }; setup_hi | save --force "'"$TMPDIR/repl-direct-command.txt"'"'
+grep -Fx hi "$TMPDIR/repl-direct-command.txt" >/dev/null

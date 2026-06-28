@@ -68,8 +68,8 @@ use nu-overlay overlay/docker.nu
 
 `nu-direnv-overlay` does not replace direnv's Nushell hook. Keep the normal
 direnv hook that runs `direnv export json` and loads the resulting environment;
-this project only consumes the extra `DIRENV_NU_OVERLAY_APPLY` variable produced
-by `.envrc`.
+this project consumes the extra `DIRENV_NU_OVERLAY_APPLY` variable produced by
+`.envrc`.
 
 The integration follows direnv's normal shell-hook model:
 
@@ -80,15 +80,23 @@ Nushell direnv hook
   -> /tmp/nu-direnv-overlay.XXXXXXXXXX/apply.nu
   -> DIRENV_NU_OVERLAY_APPLY
   -> Nushell load-env
-nu-direnv-overlay pre_prompt hook
+nu-direnv-overlay pre_execution hook
+  -> refreshes direnv env for the current command
   -> writes a per-session wrapper
-  -> sources the wrapper
+nu-direnv-overlay pre_execution source hook
+  -> sources the wrapper before command resolution
 ```
 
-direnv still owns `.envrc` evaluation, environment loading, and file watching.
-`nu-direnv-overlay` only applies the resulting Nushell overlay state inside the
-parent shell, because a child `direnv` process cannot mutate parent-shell
-overlays directly.
+direnv still owns `.envrc` evaluation and file watching. The normal Nushell
+direnv hook can load env for prompt rendering; `nu-direnv-overlay` refreshes
+env and overlays immediately before command execution. This avoids stale prompt
+wrapper state by making command-time synchronization the only automatic overlay
+source path. The tradeoff is deliberate: after `cd`, overlay commands may not
+be available to prompt-time integrations or tab completion until the next
+command is submitted. Typed commands still resolve after the split
+`pre_execution` hooks run. The overlay state must be applied inside the parent
+shell, because a child `direnv` process cannot mutate parent-shell overlays
+directly.
 
 The `.envrc` function writes a Nushell apply file and exports its path as
 `DIRENV_NU_OVERLAY_APPLY`:
@@ -136,8 +144,8 @@ interactive overlays:
 ```nu
 if ((overlay list | where name == "nu-direnv-1000-123456789-111111111" and active == true | is-not-empty)) {
   let keep_env = { PROJECT_MARK: "B" }
-  let keep_names = [ PROJECT_MARK PWD ]
-  overlay hide --keep-env [ PWD ] "nu-direnv-1000-123456789-111111111"
+  let keep_names = [ PROJECT_MARK PWD PROMPT_COMMAND ]
+  overlay hide --keep-env [ PWD PROMPT_COMMAND ] "nu-direnv-1000-123456789-111111111"
   for name in ($env | reject --optional FILE_PWD CURRENT_FILE config | columns) {
     if $name not-in $keep_names { hide-env $name --ignore-errors }
   }
@@ -208,8 +216,8 @@ direnv stdlib function system-wide, and exposes the Nushell autoload file from
 the system profile.
 
 You still need the normal Nushell direnv hook in your Nushell configuration.
-This module intentionally does not replace that hook; it only adds overlay
-support on top of the environment that direnv has already loaded.
+This module intentionally does not replace that hook; it adds overlay support on
+top of direnv's normal environment and applies overlay state at command time.
 
 ## Home Manager
 

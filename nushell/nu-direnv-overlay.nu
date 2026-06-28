@@ -59,22 +59,32 @@ def "__nu-direnv-overlay exported-names" [] {
   $tracked ++ $scoped | uniq
 }
 
-def "__nu-direnv-overlay current-env-literal" [] {
+def "__nu-direnv-overlay current-env-record" [] {
   # Capture the current post-direnv environment at wrapper generation time.
-  # Generated cleanup uses this literal record after `overlay hide` to remove
-  # names resurrected from the overlay activation environment, then restore the
-  # captured values. Same-named variables from different projects are therefore
-  # compared by the current snapshot, not by the overlay being hidden.
+  # Generated cleanup uses this record after `overlay hide` to remove names
+  # resurrected from the overlay activation environment, then restore captured
+  # values. Same-named variables from different projects are therefore compared
+  # by the current snapshot, not by the overlay being hidden.
+  #
+  # Only keep values that can be serialized into generated source and restored
+  # with `load-env`. Prompt closures such as starship's PROMPT_COMMAND belong to
+  # the user's config and cannot be represented safely in NUON.
   $env
   | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV
+  | transpose name value
+  | where {|row| ($row.value | describe) !~ "closure" }
+  | transpose --header-row --as-record
+}
+
+def "__nu-direnv-overlay current-env-literal" [] {
+  __nu-direnv-overlay current-env-record
   | to nuon
 }
 
 def "__nu-direnv-overlay current-env-names-literal" [] {
   # Keep a separate literal name list so generated cleanup does not need local
   # bookkeeping variables or repeated record introspection.
-  $env
-  | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV
+  __nu-direnv-overlay current-env-record
   | columns
   | to nuon
 }

@@ -1,6 +1,16 @@
 # shellcheck shell=bash
 
+# This file runs inside direnv's Bash evaluator, not inside Nushell.
+# Its only job is to translate `.envrc` declarations like
+# `use nu-overlay overlay/task.nu` into a generated Nushell apply file and to
+# expose that file path through DIRENV_NU_OVERLAY_APPLY.
+#
+# The parent Nushell process later consumes DIRENV_NU_OVERLAY_APPLY. A child
+# direnv process cannot mutate parent-shell overlays directly.
+
 __nu_direnv_overlay_quote_nu() {
+  # Quote a Bash string as a double-quoted Nushell string literal.
+  # `source` and `overlay use` need literal paths/names in generated code.
   local value=$1
   value=${value//\\/\\\\}
   value=${value//\"/\\\"}
@@ -9,6 +19,8 @@ __nu_direnv_overlay_quote_nu() {
 }
 
 __nu_direnv_overlay_fail() {
+  # If `.envrc` validation fails, remove the apply path so the parent Nushell
+  # hook performs cleanup instead of sourcing a partial or stale file.
   unset DIRENV_NU_OVERLAY_APPLY
   if [[ -n ${__NU_DIRENV_OVERLAY_DIR:-} ]]; then
     rm -f "$__NU_DIRENV_OVERLAY_DIR/apply.nu"
@@ -16,6 +28,8 @@ __nu_direnv_overlay_fail() {
 }
 
 __nu_direnv_overlay_dir() {
+  # One private temp directory per direnv evaluation. The generated apply file
+  # may contain trusted project code paths, so keep the directory owner-only.
   if [[ -z ${__NU_DIRENV_OVERLAY_DIR:-} ]]; then
     __NU_DIRENV_OVERLAY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/nu-direnv-overlay.XXXXXXXXXX")
     chmod 700 "$__NU_DIRENV_OVERLAY_DIR"
@@ -25,6 +39,9 @@ __nu_direnv_overlay_dir() {
 }
 
 __nu_direnv_overlay_prefix() {
+  # Internal overlay names must be deterministic for a project but not user
+  # managed. Hash the project directory to avoid collisions between projects
+  # that export the same logical overlay names such as `task`.
   if [[ -z ${__NU_DIRENV_OVERLAY_PREFIX:-} ]]; then
     local sum
     sum=$(printf '%s' "$PWD" | cksum)
@@ -35,6 +52,8 @@ __nu_direnv_overlay_prefix() {
 }
 
 __nu_direnv_overlay_path_id() {
+  # Add the overlay file path hash so multiple overlay files in the same project
+  # get distinct internal names.
   local path=$1
   local sum
   sum=$(printf '%s' "$path" | cksum)
@@ -49,10 +68,14 @@ __nu_direnv_overlay_print_export_tracking() {
   # `overlay hide` marks the overlay inactive.
   printf 'let nu_direnv_overlay_modules = ['
   for name in "${__NU_DIRENV_OVERLAY_INTERNAL_NAMES[@]}"; do
+    # The generated Nushell list contains internal overlay module names.
     printf '%s ' "$(__nu_direnv_overlay_quote_nu "$name")"
   done
   printf ']\n'
 
+  # Use `scope modules` after `overlay use` so Nushell tells us what was actually
+  # exported. This avoids guessing from source text and also catches exported
+  # constants and submodules, which need explicit `hide` cleanup too.
   cat <<'EOF'
 $env.NU_DIRENV_OVERLAY_EXPORTS = (
   scope modules
@@ -76,6 +99,9 @@ EOF
 __nu_direnv_overlay_generate_apply() {
   local dir apply active name internal_name path quoted_name quoted_path
 
+  # Rebuild the whole apply file after every `use nu-overlay` call. direnv's env
+  # diff exports only one DIRENV_NU_OVERLAY_APPLY path, so that file must contain
+  # all overlays declared so far in `.envrc`.
   dir=$(__nu_direnv_overlay_dir)
   apply="$dir/apply.nu"
 
@@ -92,12 +118,17 @@ __nu_direnv_overlay_generate_apply() {
       path=${__NU_DIRENV_OVERLAY_PATHS[$i]}
       quoted_name=$(__nu_direnv_overlay_quote_nu "$internal_name")
       quoted_path=$(__nu_direnv_overlay_quote_nu "$path")
+      # The comment keeps generated files inspectable with user-facing names.
       printf '# %s\n' "$name"
+      # Use internal names for cleanup safety; exported commands keep their
+      # original names from the module itself.
       printf 'overlay use --reload %s as %s\n' "$quoted_path" "$quoted_name"
     done
 
     active=
     for name in "${__NU_DIRENV_OVERLAY_INTERNAL_NAMES[@]}"; do
+      # Store active overlay names in env because cleanup runs later in the
+      # parent Nushell process, not during this Bash evaluation.
       if [[ -n $active ]]; then
         active+=";"
       fi
@@ -107,12 +138,16 @@ __nu_direnv_overlay_generate_apply() {
     __nu_direnv_overlay_print_export_tracking
   } >"$apply"
 
+  # This env var is the only contract from direnv Bash evaluation to the parent
+  # Nushell hook.
   export DIRENV_NU_OVERLAY_APPLY="$apply"
 }
 
 __nu_direnv_overlay_append() {
   local path=$1
   local logical_name
+  # Logical names are only comments in generated code. Users should not depend
+  # on them as overlay names.
   logical_name=$(basename "$path")
   logical_name=${logical_name%.nu}
 
@@ -121,6 +156,8 @@ __nu_direnv_overlay_append() {
     for i in "${!__NU_DIRENV_OVERLAY_NAMES[@]}"; do
       existing_path=${__NU_DIRENV_OVERLAY_PATHS[$i]}
       if [[ $existing_path == "$path" ]]; then
+        # Re-declaring the same overlay is idempotent, but regenerate in case
+        # earlier declarations changed the apply file during this evaluation.
         __nu_direnv_overlay_generate_apply
         return 0
       fi
@@ -134,6 +171,9 @@ __nu_direnv_overlay_append() {
 }
 
 __nu_direnv_overlay_abs() {
+  # Resolve relative paths from the `.envrc` working directory. Keep the basename
+  # separate so the target file itself does not need to exist while resolving the
+  # parent directory.
   local target=$1
   local dir base
   dir=$(dirname "$target")
@@ -144,6 +184,8 @@ __nu_direnv_overlay_abs() {
 __nu_direnv_overlay_use_one() {
   local file=$1
 
+  # Fail early during direnv evaluation. The parent hook will see no apply file
+  # and clean up any previous overlays.
   if [[ ! -f $file ]]; then
     log_error "nu overlay file not found: $file"
     __nu_direnv_overlay_fail
@@ -152,6 +194,7 @@ __nu_direnv_overlay_use_one() {
 
   local abs
   abs=$(__nu_direnv_overlay_abs "$file")
+  # Let direnv rerun `.envrc` when the overlay module changes.
   watch_file "$abs"
   __nu_direnv_overlay_append "$abs"
 }
@@ -159,6 +202,8 @@ __nu_direnv_overlay_use_one() {
 use_nu-overlay() {
   local file
 
+  # These arrays are scoped to one direnv evaluation. They accumulate all
+  # `use nu-overlay` calls before generating the final apply file.
   if [[ ${__NU_DIRENV_OVERLAY_INITIALIZED:-} != 1 ]]; then
     declare -ga __NU_DIRENV_OVERLAY_NAMES=()
     declare -ga __NU_DIRENV_OVERLAY_INTERNAL_NAMES=()
@@ -166,6 +211,7 @@ use_nu-overlay() {
     __NU_DIRENV_OVERLAY_INITIALIZED=1
   fi
 
+  # Keep the `.envrc` API intentionally small: exactly one module path.
   if [[ $# -ne 1 ]]; then
     log_error "use nu-overlay: expected exactly one <path.nu>"
     __nu_direnv_overlay_fail
@@ -174,12 +220,16 @@ use_nu-overlay() {
 
   file=$1
 
+  # Explicit overlay names would make cleanup ambiguous and could collide with
+  # user-managed overlays. Internal names are generated instead.
   if [[ $file == *=* ]]; then
     log_error "use nu-overlay: explicit overlay names are not supported: $file"
     __nu_direnv_overlay_fail
     return 1
   fi
 
+  # Globs are shell-dependent and could expand differently across environments.
+  # List overlays explicitly so direnv watches and cleanup are deterministic.
   case "$file" in
     *'*'* | *'?'* | *'['* | *']'*)
       log_error "use nu-overlay: globs are not supported: $file"

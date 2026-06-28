@@ -22,12 +22,17 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Home Manager installs the package and runtime tools in the user profile.
+    # The user still needs their normal Nushell direnv hook; this module only
+    # adds overlay support on top.
     home.packages = [
       package
       pkgs.direnv
       pkgs.nushell
     ];
 
+    # Register the direnv-side `use nu-overlay` function for this user.
+    # The Nushell-side hook is loaded from the package's vendor autoload path.
     xdg.configFile."direnv/direnvrc".text = ''
       source ${package}/share/direnv/lib/nu-overlay.sh
     '';

@@ -18,14 +18,19 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
+        # Build/install the package from the same derivation used by modules and
+        # profile installs.
         packages.default = pkgs.callPackage ./nix/package.nix { };
 
+        # Expose the helper CLI as the default app for quick `nix run` checks.
         apps.default = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/nu-direnv-overlay";
           meta.description = "Project-local Nushell overlays managed by direnv";
         };
 
+        # Development shell intentionally stays small: runtime tools plus the
+        # package under test.
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.direnv
@@ -34,9 +39,14 @@
           ];
         };
 
+        # The check builds a synthetic direnv project and exercises the Bash and
+        # Nushell halves together. Most failures here are regressions in hook
+        # ordering, parser-keyword code generation, or cleanup behavior.
         checks.default = pkgs.runCommand "nu-direnv-overlay-check" { } ''
           set -eu
           pkg=${self.packages.${system}.default}
+
+          # Isolate direnv/Nushell state from the builder environment.
           export HOME="$TMPDIR/home"
           export XDG_CONFIG_HOME="$TMPDIR/config"
           export XDG_DATA_HOME="$TMPDIR/data"
@@ -47,13 +57,17 @@
           test -f "$pkg/share/direnv/lib/nu-overlay.sh"
           test -f "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
 
+          # Ensure the direnv-side library defines the .envrc API.
           ${pkgs.direnv}/bin/direnv stdlib > "$TMPDIR/stdlib.sh"
           . "$pkg/share/direnv/lib/nu-overlay.sh"
           type use_nu-overlay >/dev/null
 
+          # Ensure the Nushell-side autoload file can be sourced in a clean shell.
           ${pkgs.nushell}/bin/nu --no-config-file --commands \
             'source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"; nu-direnv-overlay status | ignore'
 
+          # Prompt hooks must be idempotent and ordered. sync writes the wrapper;
+          # source evaluates it in the interactive scope.
           ${pkgs.nushell}/bin/nu --no-config-file --commands '
             source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
             $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
@@ -65,6 +79,8 @@
             }
           '
 
+          # Synthetic project: two overlay files so cleanup must handle multiple
+          # internal overlay names and exported definitions.
           printf 'source %q\n' "$pkg/share/direnv/lib/nu-overlay.sh" > "$XDG_CONFIG_HOME/direnv/direnvrc"
           mkdir -p "$TMPDIR/project/overlay"
           cat > "$TMPDIR/project/.envrc" <<'EOF'
@@ -85,6 +101,8 @@
             ${pkgs.direnv}/bin/direnv allow . >/dev/null
           )
 
+          # direnv evaluation should produce an apply file path for the parent
+          # Nushell hook to consume.
           apply=$(
             cd "$TMPDIR/project"
             ${pkgs.nushell}/bin/nu --no-config-file --commands \
@@ -92,6 +110,7 @@
           )
           test -f "$apply"
 
+          # The raw apply file must be valid Nushell and expose project commands.
           cat > "$TMPDIR/apply-test.nu" <<EOF
           const apply = '$apply'
           source \$apply
@@ -103,6 +122,8 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/apply-test.nu"
 
+          # Simulate the normal direnv hook loading env before nu-direnv-overlay
+          # syncs overlays from the inherited DIRENV_NU_OVERLAY_APPLY value.
           (
             cd "$TMPDIR/project"
             ${pkgs.direnv}/bin/direnv export json > "$TMPDIR/inherited.json"
@@ -120,6 +141,8 @@
           )
           test -f "$hook_apply"
 
+          # The wrapper produced from inherited direnv state should load the same
+          # commands as the raw apply file.
           cat > "$TMPDIR/hook-apply-test.nu" <<EOF
           const apply = '$hook_apply'
           source \$apply
@@ -128,6 +151,8 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/hook-apply-test.nu"
 
+          # Manual reload is overlay-only: it should resync from current env
+          # without calling direnv itself.
           cat > "$TMPDIR/inherited-force-reload.nu" <<EOF
           open "$TMPDIR/inherited.json" | load-env
           \$env.PATH = (\$env.PATH | prepend "${pkgs.direnv}/bin")
@@ -149,6 +174,9 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/reloaded-apply-test.nu"
 
+          # Compatibility case: an existing direnv PWD hook has already loaded
+          # env, then prompt-sync writes the wrapper. This guards against
+          # consuming DIRENV_DIFF from this project.
           external_hook_source=$(
             cd "$TMPDIR/project"
             ${pkgs.nushell}/bin/nu --no-config-file --commands '
@@ -173,6 +201,9 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/external-hook-apply-test.nu"
 
+          # Build a cleanup wrapper after simulating a directory leave. This is
+          # where stale apply paths and active overlays have historically caused
+          # command/env resurrection.
           stale_cleanup=$(
             ${pkgs.nushell}/bin/nu --no-config-file --commands '
               source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
@@ -216,6 +247,9 @@
             exit 1
           fi
 
+          # Source cleanup in a shell with active overlays. It must preserve the
+          # current PWD/env, hide leaked exported definitions, and deactivate all
+          # project overlays.
           cat > "$TMPDIR/stale-cleanup-test.nu" <<EOF
           const apply = '$reloaded_apply'
           const cleanup = '$stale_cleanup'
@@ -238,15 +272,19 @@
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/stale-cleanup-test.nu"
 
+          # runCommand outputs must create $out on success.
           touch "$out"
         '';
       }
     )
     // {
+      # Consumers can import this overlay to get the package in their nixpkgs.
       overlays.default = final: _prev: {
         nu-direnv-overlay = final.callPackage ./nix/package.nix { };
       };
 
+      # Keep module exports outside eachDefaultSystem because NixOS/Home Manager
+      # modules are not system-specific flake outputs.
       nixosModules.default = import ./nix/nixos-module.nix self;
       homeManagerModules.default = import ./nix/home-manager-module.nix self;
     };

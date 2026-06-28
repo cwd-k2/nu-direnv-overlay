@@ -324,6 +324,7 @@ stale_cleanup=$(
     const apply = "'"$reloaded_apply"'"
     source $apply
     hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
+    hide-env NU_DIRENV_OVERLAY_EXPORTS --ignore-errors
     hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
     $env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST = "generator"
     __nu-direnv-overlay write-source --cleanup-only

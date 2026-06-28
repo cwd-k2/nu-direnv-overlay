@@ -38,8 +38,25 @@ def "__nu-direnv-overlay active-names" [] {
 def "__nu-direnv-overlay exported-names" [] {
   # Nushell can leave exported commands/aliases visible after `overlay hide`.
   # The generated apply file records exactly which names the project overlay
-  # exported, so cleanup can hide only those definitions.
-  $env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != ""
+  # exported, but a normal direnv unload can remove that env var before this
+  # prompt hook runs. Fall back to the still-loaded internal module metadata so
+  # cleanup does not leave commands callable without their direnv environment.
+  let tracked = ($env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != "")
+  let scoped = (
+    scope modules
+    | where {|module| $module.name =~ '^nu-direnv-' }
+    | each {|module|
+        (
+          ($module.commands | get name)
+          ++ ($module.aliases | get name)
+          ++ ($module.externs | get name)
+          ++ ($module.constants | get name)
+          ++ ($module.submodules | get name)
+        )
+      }
+    | flatten
+  )
+  $tracked ++ $scoped | uniq
 }
 
 def "__nu-direnv-overlay hide-overlay-line" [name: string] {

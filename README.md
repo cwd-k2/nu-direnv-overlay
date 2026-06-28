@@ -134,16 +134,27 @@ per-session wrapper, because only that session can see and mutate the active
 interactive overlays:
 
 ```nu
-if ((overlay list | where name == "nu-direnv-1000-123456789-111111111" and active == true | is-not-empty)) { overlay hide --keep-env [ PWD ] "nu-direnv-1000-123456789-111111111" }
+if ((overlay list | where name == "nu-direnv-1000-123456789-111111111" and active == true | is-not-empty)) {
+  let keep_env = { PROJECT_MARK: "B" }
+  let keep_names = [ PROJECT_MARK PWD ]
+  overlay hide --keep-env [ PWD ] "nu-direnv-1000-123456789-111111111"
+  for name in ($env | reject --optional FILE_PWD CURRENT_FILE config | columns) {
+    if $name not-in $keep_names { hide-env $name --ignore-errors }
+  }
+  load-env $keep_env
+}
 hide "build"
 hide "project_name"
 $env.NU_DIRENV_OVERLAY_ACTIVE = ""
 $env.NU_DIRENV_OVERLAY_EXPORTS = ""
 ```
 
-`overlay hide --keep-env [ PWD ]` keeps `cd` from being rolled back when an
-overlay has changed environment state. Nushell can also leave exported
-definitions visible after an overlay becomes inactive, so
+Cleanup snapshots the current post-direnv environment before hiding old
+overlays, keeps `PWD` and non-serializable prompt closures during
+`overlay hide`, removes names resurrected from the old overlay activation
+environment, then restores the snapshot. This prevents old project environment
+values from leaking back while moving between projects. Nushell can also leave
+exported definitions visible after an overlay becomes inactive, so
 `NU_DIRENV_OVERLAY_EXPORTS` tracks exported commands, aliases, externs,
 constants, and submodules and hides those names during cleanup.
 

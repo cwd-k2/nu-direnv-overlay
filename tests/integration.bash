@@ -15,7 +15,7 @@ run_nu() {
 }
 
 wrapper_path='
-$nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
+$nu.cache-dir | path join "nu-direnv-overlay" $"($nu.pid).nu"
 '
 
 assert_project_commands='
@@ -41,19 +41,49 @@ type use_nu-overlay >/dev/null
 # Ensure the Nushell-side autoload file can be sourced in a clean shell.
 run_nu --commands 'source "'"$autoload"'"; nu-direnv-overlay status | ignore'
 
-# Prompt hook installation must be idempotent. The hook writes the wrapper and
-# immediately sources it in one string so no other prompt hook can interleave.
+# Prompt hook installation must be idempotent. The sync and source hooks are
+# installed adjacent to each other so the source hook sees freshly written
+# wrapper contents.
 run_nu --commands '
   source "'"$autoload"'"
   $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
+  let wrapper = ($nu.cache-dir | path join "nu-direnv-overlay" $"($nu.pid).nu")
+  let legacy_wrapper = ($nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu")
+  let sq = (char -i 39)
+  mkdir ($wrapper | path dirname)
+  "error make { msg: \"stale wrapper was sourced\" }" | save --force $wrapper
+  $env.config.hooks.pre_prompt = [
+    "existing hook"
+    $"__nu-direnv-overlay prompt-sync; source ($sq)($legacy_wrapper)($sq)"
+    "__nu-direnv-overlay prompt-sync"
+    $"source ($sq)($legacy_wrapper)($sq)"
+  ]
   __nu-direnv-overlay install-prompt-hooks
   __nu-direnv-overlay install-prompt-hooks
-  let hook = ($env.config.hooks.pre_prompt | last)
-  if (($hook | str contains "__nu-direnv-overlay prompt-sync; source ") != true) {
-    error make { msg: "prompt hook was not installed as combined sync/source command" }
+  let hooks = ($env.config.hooks.pre_prompt | last 2)
+  if "existing hook" not-in $env.config.hooks.pre_prompt {
+    error make { msg: "unrelated prompt hook was removed" }
   }
-  if (($env.config.hooks.pre_prompt | where $it == $hook | length) != 1) {
+  if ($env.config.hooks.pre_prompt | where {|hook| $hook =~ "nu-direnv-overlay-"} | is-not-empty) {
+    error make { msg: "legacy tmp prompt hook was not removed" }
+  }
+  if $hooks.0 != "__nu-direnv-overlay prompt-sync" {
+    error make { msg: "prompt sync hook was not installed before source hook" }
+  }
+  if (($hooks.1 | str starts-with "source ") != true) {
+    error make { msg: "prompt source hook was not installed after sync hook" }
+  }
+  if (($env.config.hooks.pre_prompt | where $it == $hooks.0 | length) != 1) {
     error make { msg: "prompt hook installation was not idempotent" }
+  }
+  if (($env.config.hooks.pre_prompt | where $it == $hooks.1 | length) != 1) {
+    error make { msg: "prompt source hook installation was not idempotent" }
+  }
+  if not ($wrapper | path exists) {
+    error make { msg: "prompt source wrapper was not created before hook installation" }
+  }
+  if ((open $wrapper) != "") {
+    error make { msg: "stale prompt source wrapper was not reset on install" }
   }
 '
 
@@ -216,7 +246,7 @@ if \$env.PWD != "$TMPDIR/project" {
   error make { msg: "overlay command did not cd to project root" }
 }
 __nu-direnv-overlay write-source
-let wrapper = (\$nu.temp-dir | path join $"nu-direnv-overlay-(\$nu.pid).nu")
+let wrapper = (\$nu.cache-dir | path join "nu-direnv-overlay" $"(\$nu.pid).nu")
 if ((ls \$wrapper | get size.0 | into int) != 0) {
   error make { msg: "prompt sync after command cd was not a no-op" }
 }

@@ -11,19 +11,21 @@
 # existing direnv hook and can consume DIRENV_DIFF in the wrong order.
 
 # Stable per-session wrapper path. Hook strings are installed once, while the
-# file contents are rewritten whenever the prompt is about to render.
-const overlay_source = ($nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu")
+# file contents are rewritten whenever the prompt is about to render. Keep it
+# out of /tmp so cleanup jobs do not remove it from long-lived shells.
+const overlay_source = ($nu.cache-dir | path join "nu-direnv-overlay" $"($nu.pid).nu")
+const overlay_legacy_temp_source = ($nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu")
 
-# Single pre_prompt hook: rewrite overlay_source from the current env, then
-# source it immediately in the interactive scope. Keeping these actions in one
-# hook prevents other prompt hooks, including direnv hooks, from running between
-# wrapper generation and evaluation.
-const overlay_prompt_command = $"__nu-direnv-overlay prompt-sync; source '($overlay_source)'"
+# Keep sync and source as separate adjacent hooks. Nushell parses sourced files
+# before executing a hook string, so a single `sync; source ...` string would
+# source the wrapper contents from before sync rewrote them.
+const overlay_sync_command = "__nu-direnv-overlay prompt-sync"
+const overlay_source_command = $"source '($overlay_source)'"
 
-# Older releases installed these as two separate hooks. Keep the literals so a
-# reloaded autoload file can replace them with the combined hook.
-const overlay_legacy_sync_command = "__nu-direnv-overlay prompt-sync"
-const overlay_legacy_source_command = $"source '($overlay_source)'"
+# Older releases installed /tmp-backed hooks or a combined sync/source hook.
+# Keep the literals so a reloaded autoload file can replace them.
+const overlay_legacy_combined_command = $"__nu-direnv-overlay prompt-sync; source '($overlay_legacy_temp_source)'"
+const overlay_legacy_source_command = $"source '($overlay_legacy_temp_source)'"
 
 def --env "__nu-direnv-overlay quote" [value: string] {
   # Generated wrapper files contain literal Nushell code, not runtime variables.
@@ -171,6 +173,13 @@ def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
   ]
 }
 
+def "__nu-direnv-overlay ensure-source" [--reset] {
+  mkdir ($overlay_source | path dirname)
+  if ($reset or not ($overlay_source | path exists)) {
+    "" | save --force $overlay_source
+  }
+}
+
 def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
   # pre_prompt runs on every Enter. Re-hiding exported commands and then sourcing
   # the exact same overlay can leave Nushell with commands hidden while their
@@ -192,6 +201,8 @@ def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
 
 def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
   let apply = (__nu-direnv-overlay apply-path --cleanup-only=$cleanup_only)
+  mkdir ($overlay_source | path dirname)
+  "" | save --force $overlay_source
 
   # direnv generates the real apply file while evaluating the allowed .envrc.
   # This per-session wrapper gives Nushell a stable path to source from the
@@ -206,27 +217,32 @@ def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
     __nu-direnv-overlay cleanup-wrapper-lines
   }
 
-  mkdir ($overlay_source | path dirname)
   # The pre_prompt hook sources this stable path. Its contents are rewritten
   # after direnv updates env, which avoids putting dynamic paths in hook strings.
   $body | str join (char newline) | save --force $overlay_source
 }
 
-def --env "__nu-direnv-overlay install-prompt-hooks" [] {
-  # String hooks are parsed as if typed at the prompt. The sync hook updates the
-  # wrapper after other PWD hooks have had a chance to load direnv's env diff;
-  # the source hook then applies overlay parser keywords in the interactive
-  # scope, where exported definitions become visible.
+def --env "__nu-direnv-overlay install-prompt-hooks" [--preserve-source] {
+  let existing_hooks = ($env.config.hooks.pre_prompt? | default [])
+
+  # String hooks are parsed as if typed at the prompt. Keep the source target
+  # present before installing the hook because Nushell rejects missing sourced
+  # files before hook commands run.
+  __nu-direnv-overlay ensure-source --reset=(not $preserve_source and $overlay_source_command not-in $existing_hooks)
+
+  # The sync hook updates the wrapper after other PWD hooks have had a chance to
+  # load direnv's env diff; the source hook then applies overlay parser keywords
+  # in the interactive scope, where exported definitions become visible.
   let hooks = (
-    $env.config.hooks.pre_prompt? | default []
+    $existing_hooks
     # Remove our previous strings before appending. Autoload files can be sourced
     # more than once in long-lived shells, and duplicate pre_prompt hooks would
     # repeatedly hide/source overlays on every Enter.
-    | where {|hook| $hook != $overlay_prompt_command and $hook != $overlay_legacy_sync_command and $hook != $overlay_legacy_source_command }
+    | where {|hook| $hook != $overlay_sync_command and $hook != $overlay_source_command and $hook != $overlay_legacy_combined_command and $hook != $overlay_legacy_source_command }
   )
-  # The combined hook keeps wrapper generation adjacent to parser-keyword
-  # evaluation. Appending it also lets it observe env after earlier direnv hooks.
-  $env.config.hooks.pre_prompt = ($hooks | append $overlay_prompt_command)
+  # Appending adjacent hooks lets sync observe env after earlier direnv hooks,
+  # while the following source hook sees the freshly written wrapper.
+  $env.config.hooks.pre_prompt = ($hooks | append $overlay_sync_command | append $overlay_source_command)
 }
 
 def --env "__nu-direnv-overlay sync-overlays" [] {
@@ -234,7 +250,7 @@ def --env "__nu-direnv-overlay sync-overlays" [] {
   # The normal Nushell direnv hook owns env changes. We only consume
   # DIRENV_NU_OVERLAY_APPLY after that hook has updated the parent shell env.
   __nu-direnv-overlay write-source
-  __nu-direnv-overlay install-prompt-hooks
+  __nu-direnv-overlay install-prompt-hooks --preserve-source
 }
 
 def --env "__nu-direnv-overlay prompt-sync" [] {

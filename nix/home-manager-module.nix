@@ -27,14 +27,16 @@ in
     # adds overlay support on top.
     home.packages = [
       package
-      pkgs.direnv
       pkgs.nushell
     ];
 
-    # Register the direnv-side `use nu-overlay` function for this user.
-    # The Nushell-side hook is loaded from the package's vendor autoload path.
-    xdg.configFile."direnv/direnvrc".text = ''
-      source ${package}/share/direnv/lib/nu-overlay.sh
-    '';
+    # Let Home Manager's upstream direnv module own direnvrc and append our
+    # .envrc helper there. This composes with users' existing stdlib content.
+    programs.direnv = {
+      enable = lib.mkDefault true;
+      stdlib = lib.mkAfter ''
+        source ${package}/share/direnv/lib/nu-overlay.sh
+      '';
+    };
   };
 }

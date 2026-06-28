@@ -26,7 +26,6 @@ in
     # This module does not configure the user's normal Nushell direnv hook.
     environment.systemPackages = [
       package
-      pkgs.direnv
       pkgs.nushell
     ];
 
@@ -36,25 +35,14 @@ in
       "/share/nushell"
     ];
 
-    # System direnvrc registers the `use nu-overlay` .envrc function, then
-    # chains user direnv customizations. DIRENV_CONFIG below points direnv at
-    # /etc/direnv so this system file is consistently loaded.
-    environment.etc."direnv/direnvrc".text = ''
-      source ${package}/share/direnv/lib/nu-overlay.sh
-
-      # Preserve normal user extension points even though DIRENV_CONFIG is
-      # redirected to /etc/direnv.
-      user_direnv_config="''${XDG_CONFIG_HOME:-$HOME/.config}/direnv"
-      for lib in "$user_direnv_config/lib/"*.sh; do
-        [ -f "$lib" ] && source "$lib"
-      done
-      [ -f "$user_direnv_config/direnvrc" ] && source "$user_direnv_config/direnvrc"
-      [ -f "$HOME/.direnvrc" ] && source "$HOME/.direnvrc"
-    '';
-
-    # direnv normally reads ~/.config/direnv. Pointing it at /etc/direnv lets the
-    # module provide a system-wide library while the direnvrc above re-includes
-    # per-user config files.
-    environment.sessionVariables.DIRENV_CONFIG = "/etc/direnv";
+    # Let NixOS's upstream direnv module own /etc/direnv/direnvrc and append our
+    # .envrc helper there. This avoids collisions with users that already enable
+    # programs.direnv or set direnvrcExtra themselves.
+    programs.direnv = {
+      enable = lib.mkDefault true;
+      direnvrcExtra = lib.mkAfter ''
+        source ${package}/share/direnv/lib/nu-overlay.sh
+      '';
+    };
   };
 }

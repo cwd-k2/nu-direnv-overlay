@@ -326,6 +326,7 @@ stale_cleanup=$(
     hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
     hide-env NU_DIRENV_OVERLAY_EXPORTS --ignore-errors
     hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+    hide-env PROJECT_ROOT --ignore-errors
     $env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST = "generator"
     __nu-direnv-overlay write-source --cleanup-only
     '"$wrapper_path"'
@@ -356,6 +357,7 @@ const apply = '$reloaded_apply'
 const cleanup = '$stale_cleanup'
 source \$apply
 cd "$TMPDIR"
+hide-env PROJECT_ROOT --ignore-errors
 \$env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST = "outside"
 source \$cleanup
 if \$env.PWD != "$TMPDIR" {
@@ -363,6 +365,9 @@ if \$env.PWD != "$TMPDIR" {
 }
 if (\$env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST? | default "") != "outside" {
   error make { msg: "cleanup restored environment while hiding overlay" }
+}
+if (\$env.PROJECT_ROOT? | default "") != "" {
+  error make { msg: "cleanup resurrected unloaded direnv environment" }
 }
 if ((scope commands | where name in [build st] | is-not-empty)) {
   error make { msg: "overlay commands remained visible after cleanup" }

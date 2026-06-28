@@ -65,10 +65,11 @@ def "__nu-direnv-overlay hide-overlay-line" [name: string] {
   # activated, except for names listed in --keep-env. Project overlays are loaded
   # after direnv has entered a dev shell, so a plain hide can resurrect Nix env
   # after direnv has unloaded it. Preserve the current env in a temporary env var,
-  # hide the overlay while keeping PWD and that temporary var, then load the
-  # saved env back. Do not load automatic/special values: Nushell rejects PWD,
-  # FILE_PWD, and CURRENT_FILE, and loading `config` can disturb completions.
-  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_KEEP_ENV = \($env | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV\); overlay hide --keep-env [ PWD __NU_DIRENV_OVERLAY_KEEP_ENV ] ($quoted); load-env $env.__NU_DIRENV_OVERLAY_KEEP_ENV; hide-env __NU_DIRENV_OVERLAY_KEEP_ENV --ignore-errors }"
+  # hide the overlay while keeping PWD and that temporary var, remove any env
+  # names resurrected by `overlay hide`, then load the saved env back. Do not
+  # load automatic/special values: Nushell rejects PWD, FILE_PWD, and
+  # CURRENT_FILE, and loading `config` can disturb completions.
+  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_KEEP_ENV = \($env | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV\); let __nu_direnv_overlay_keep_names = \($env.__NU_DIRENV_OVERLAY_KEEP_ENV | columns\); overlay hide --keep-env [ PWD __NU_DIRENV_OVERLAY_KEEP_ENV ] ($quoted); let __nu_direnv_overlay_restore_names = \($env | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV | columns | where {|name| $name not-in $__nu_direnv_overlay_keep_names }\); for name in $__nu_direnv_overlay_restore_names { hide-env $name --ignore-errors }; load-env $env.__NU_DIRENV_OVERLAY_KEEP_ENV; hide-env __NU_DIRENV_OVERLAY_KEEP_ENV --ignore-errors }"
 }
 
 def "__nu-direnv-overlay hide-export-line" [name: string] {

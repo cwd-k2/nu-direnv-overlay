@@ -24,13 +24,7 @@ def "__nu-direnv-overlay exported-names" [] {
 
 def "__nu-direnv-overlay hide-overlay-line" [name: string] {
   let quoted = (__nu-direnv-overlay quote $name)
-  let keep_env = (
-    $env
-    | columns
-    | each {|env_name| __nu-direnv-overlay quote $env_name }
-    | str join " "
-  )
-  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ ($keep_env) ] ($quoted) }"
+  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_KEEP_ENV = \($env | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV\); overlay hide --keep-env [ PWD __NU_DIRENV_OVERLAY_KEEP_ENV ] ($quoted); load-env $env.__NU_DIRENV_OVERLAY_KEEP_ENV; hide-env __NU_DIRENV_OVERLAY_KEEP_ENV --ignore-errors }"
 }
 
 def "__nu-direnv-overlay hide-export-line" [name: string] {

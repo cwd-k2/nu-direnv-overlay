@@ -95,9 +95,22 @@
           cat > "$TMPDIR/project/overlay/git.nu" <<'EOF'
           export def st [] { "status" }
           EOF
+          mkdir -p "$TMPDIR/project-b/overlay"
+          cat > "$TMPDIR/project-b/.envrc" <<'EOF'
+          export PROJECT_MARK=B
+          use nu-overlay overlay/task.nu
+          EOF
+          cat > "$TMPDIR/project-b/overlay/task.nu" <<'EOF'
+          export def build [] { "built-b" }
+          export def b_only [] { "b-only" }
+          EOF
 
           (
             cd "$TMPDIR/project"
+            ${pkgs.direnv}/bin/direnv allow . >/dev/null
+          )
+          (
+            cd "$TMPDIR/project-b"
             ${pkgs.direnv}/bin/direnv allow . >/dev/null
           )
 
@@ -127,6 +140,10 @@
           (
             cd "$TMPDIR/project"
             ${pkgs.direnv}/bin/direnv export json > "$TMPDIR/inherited.json"
+          )
+          (
+            cd "$TMPDIR/project-b"
+            ${pkgs.direnv}/bin/direnv export json > "$TMPDIR/inherited-b.json"
           )
           cat > "$TMPDIR/inherited-reload.nu" <<EOF
           open "$TMPDIR/inherited.json" | load-env
@@ -173,6 +190,38 @@
           if (st) != "status" { error make { msg: "st command did not reload from inherited direnv state" } }
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/reloaded-apply-test.nu"
+
+          # Direct project-to-project movement is different from leaving to an
+          # unmanaged directory: cleanup for project A runs while direnv has
+          # already loaded project B's environment and apply path. A cleanup must
+          # not roll B's env back, and B's apply must replace overlapping command
+          # names such as `build`.
+          project_to_project_wrapper=$(
+            ${pkgs.nushell}/bin/nu --no-config-file --commands '
+              source "'"$pkg"'/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+              const apply_a = "'"$reloaded_apply"'"
+              open "'"$TMPDIR/inherited-b.json"'" | load-env
+              source $apply_a
+              __nu-direnv-overlay write-source
+              $nu.temp-dir | path join $"nu-direnv-overlay-($nu.pid).nu"
+            '
+          )
+          cat > "$TMPDIR/project-to-project-test.nu" <<EOF
+          const apply_a = '$reloaded_apply'
+          const wrapper = '$project_to_project_wrapper'
+          source "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+          open "$TMPDIR/inherited-b.json" | load-env
+          source \$apply_a
+          source \$wrapper
+          if (build) != "built-b" { error make { msg: "project B build command did not replace project A build command" } }
+          if (b_only) != "b-only" { error make { msg: "project B unique command did not load" } }
+          if ((scope commands | where name == st | is-not-empty)) { error make { msg: "project A command leaked into project B" } }
+          if (\$env.PROJECT_MARK? | default "") != "B" { error make { msg: "project B env was not preserved during project-to-project cleanup" } }
+          if ((nu-direnv-overlay status | get active | length) != 1) {
+            error make { msg: "unexpected active overlay count after project-to-project cleanup" }
+          }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/project-to-project-test.nu"
 
           # Compatibility case: an existing direnv PWD hook has already loaded
           # env, then prompt-sync writes the wrapper. This guards against

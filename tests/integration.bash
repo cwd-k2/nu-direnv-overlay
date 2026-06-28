@@ -362,6 +362,7 @@ cd "$TMPDIR"
 hide-env PROJECT_ROOT --ignore-errors
 \$env.PROJECT_MARK = "outside"
 \$env.NU_DIRENV_OVERLAY_KEEP_ENV_TEST = "outside"
+\$env.PROMPT_COMMAND = {|| "prompt" }
 source \$cleanup
 if \$env.PWD != "$TMPDIR" {
   error make { msg: "cleanup changed PWD while hiding overlay" }
@@ -374,6 +375,9 @@ if (\$env.PROJECT_ROOT? | default "") != "" {
 }
 if (\$env.PROJECT_MARK? | default "") != "outside" {
   error make { msg: "cleanup did not preserve same-named current env value" }
+}
+if (do \$env.PROMPT_COMMAND) != "prompt" {
+  error make { msg: "cleanup removed prompt closure" }
 }
 if ((scope commands | where name in [build st] | is-not-empty)) {
   error make { msg: "overlay commands remained visible after cleanup" }

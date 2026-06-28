@@ -82,25 +82,42 @@ def "__nu-direnv-overlay current-env-literal" [] {
 }
 
 def "__nu-direnv-overlay current-env-names-literal" [] {
-  # Keep a separate literal name list so generated cleanup does not need local
-  # bookkeeping variables or repeated record introspection.
-  __nu-direnv-overlay current-env-record
+  # Names allowed to exist after cleanup. This includes non-serializable values,
+  # such as prompt closures, even though those values are absent from the
+  # `load-env` snapshot.
+  $env
+  | reject --optional FILE_PWD CURRENT_FILE config
   | columns
   | to nuon
 }
 
-def "__nu-direnv-overlay hide-overlay-line" [name: string, keep_env: string, keep_names: string] {
+def "__nu-direnv-overlay preserve-env-names-literal" [] {
+  # Names whose current values must survive `overlay hide` itself. PWD is always
+  # controlled by the current shell directory. Closure values cannot be
+  # serialized, so they are preserved in place instead of restored via load-env.
+  let closure_names = (
+    $env
+    | reject --optional FILE_PWD CURRENT_FILE config
+    | transpose name value
+    | where {|row| ($row.value | describe) =~ "closure" }
+    | get name
+  )
+  [PWD] ++ $closure_names | uniq | to nuon
+}
+
+def "__nu-direnv-overlay hide-overlay-line" [name: string, keep_env: string, keep_names: string, preserve_names: string] {
   let quoted = (__nu-direnv-overlay quote $name)
   # `overlay hide` restores the environment that existed when the overlay was
   # activated, except for names listed in --keep-env. Project overlays are loaded
   # after direnv has entered a dev shell, so a plain hide can resurrect Nix env
   # after direnv has unloaded it. Generated cleanup embeds the current
-  # post-direnv env record and its name list as literals. After hiding the
-  # overlay, it removes names outside that list, then restores the literal record.
-  # PWD stays controlled by Nushell's current directory, and automatic/special
-  # values are excluded because Nushell rejects PWD/FILE_PWD/CURRENT_FILE and
-  # loading `config` can disturb completions.
-  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { overlay hide --keep-env [ PWD ] ($quoted); for name in \($env | reject --optional PWD FILE_PWD CURRENT_FILE config | columns\) { if $name not-in ($keep_names) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
+  # post-direnv env record and allowed name list as literals. `overlay hide`
+  # keeps only PWD and currently-present non-serializable closure values. Cleanup
+  # then removes names outside the allowed list and restores serializable values
+  # from the literal record. Automatic/special values are excluded because
+  # Nushell rejects FILE_PWD/CURRENT_FILE and loading `config` can disturb
+  # completions.
+  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { let __nu_direnv_overlay_preserve_names = \(($preserve_names) | where {|name| $name in \($env | columns\) }\); overlay hide --keep-env $__nu_direnv_overlay_preserve_names ($quoted); for name in \($env | reject --optional FILE_PWD CURRENT_FILE config | columns\) { if $name not-in ($keep_names) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
 }
 
 def "__nu-direnv-overlay hide-export-line" [name: string] {
@@ -115,7 +132,8 @@ def "__nu-direnv-overlay cleanup-lines" [] {
   # hide exported definitions that Nushell may otherwise leave in scope.
   let keep_env = (__nu-direnv-overlay current-env-literal)
   let keep_names = (__nu-direnv-overlay current-env-names-literal)
-  let hide_overlays = (__nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name $keep_env $keep_names })
+  let preserve_names = (__nu-direnv-overlay preserve-env-names-literal)
+  let hide_overlays = (__nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name $keep_env $keep_names $preserve_names })
   let hide_exports = (__nu-direnv-overlay exported-names | each {|name| __nu-direnv-overlay hide-export-line $name })
   $hide_overlays ++ $hide_exports
 }

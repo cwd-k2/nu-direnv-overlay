@@ -155,6 +155,7 @@ hide "build"
 hide "project_name"
 $env.NU_DIRENV_OVERLAY_ACTIVE = ""
 $env.NU_DIRENV_OVERLAY_EXPORTS = ""
+$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""
 ```
 
 Cleanup snapshots the current post-direnv environment before hiding old

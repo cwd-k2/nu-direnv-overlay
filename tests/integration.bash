@@ -41,16 +41,19 @@ type use_nu-overlay >/dev/null
 # Ensure the Nushell-side autoload file can be sourced in a clean shell.
 run_nu --commands 'source "'"$autoload"'"; nu-direnv-overlay status | ignore'
 
-# Prompt hooks must be idempotent and ordered. sync writes the wrapper; source
-# evaluates it in the interactive scope.
+# Prompt hook installation must be idempotent. The hook writes the wrapper and
+# immediately sources it in one string so no other prompt hook can interleave.
 run_nu --commands '
   source "'"$autoload"'"
   $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
   __nu-direnv-overlay install-prompt-hooks
   __nu-direnv-overlay install-prompt-hooks
-  let prompt_hooks = ($env.config.hooks.pre_prompt | last 2)
-  if (($prompt_hooks.0 != "__nu-direnv-overlay prompt-sync") or (not ($prompt_hooks.1 | str starts-with "source "))) {
-    error make { msg: "prompt hooks were not installed in sync/source order" }
+  let hook = ($env.config.hooks.pre_prompt | last)
+  if (($hook | str contains "__nu-direnv-overlay prompt-sync; source ") != true) {
+    error make { msg: "prompt hook was not installed as combined sync/source command" }
+  }
+  if (($env.config.hooks.pre_prompt | where $it == $hook | length) != 1) {
+    error make { msg: "prompt hook installation was not idempotent" }
   }
 '
 
@@ -412,3 +415,57 @@ if \$env.PWD != "$TMPDIR/elsewhere/deep" {
 }
 EOF
 run_nu "$TMPDIR/repeated-pwd-test.nu"
+
+# Full navigation regression for setup -> project-b -> unmanaged -> setup.
+# The setup-like env var must be absent outside setup-like project state and
+# restored when entering it again.
+setup_roundtrip_cleanup=$(
+  run_nu --commands '
+    source "'"$autoload"'"
+    const apply = "'"$reloaded_apply"'"
+    source $apply
+    hide-env NU_DIRENV_OVERLAY_ACTIVE --ignore-errors
+    hide-env NU_DIRENV_OVERLAY_EXPORTS --ignore-errors
+    hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+    hide-env PROJECT_ROOT --ignore-errors
+    __nu-direnv-overlay write-source --cleanup-only
+    '"$wrapper_path"'
+  '
+)
+setup_roundtrip_apply=$(
+  run_nu --commands '
+    source "'"$autoload"'"
+    open "'"$TMPDIR/inherited.json"'" | load-env
+    __nu-direnv-overlay write-source
+    '"$wrapper_path"'
+  '
+)
+cat >"$TMPDIR/setup-roundtrip-test.nu" <<EOF
+const apply_a = '$reloaded_apply'
+const cleanup = '$setup_roundtrip_cleanup'
+const apply_again = '$setup_roundtrip_apply'
+const project_to_project = '$project_to_project_wrapper'
+source "$autoload"
+open "$TMPDIR/inherited.json" | load-env
+source \$apply_a
+if (\$env.PROJECT_ROOT? | default "") != "$TMPDIR/project" {
+  error make { msg: "setup-like env did not load initially" }
+}
+open "$TMPDIR/inherited-b.json" | load-env
+source \$project_to_project
+if (\$env.PROJECT_ROOT? | default "") != "" {
+  error make { msg: "setup-like env leaked into project-b" }
+}
+hide-env PROJECT_MARK --ignore-errors
+hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors
+source \$cleanup
+if (\$env.PROJECT_ROOT? | default "") != "" {
+  error make { msg: "setup-like env resurrected in unmanaged directory" }
+}
+open "$TMPDIR/inherited.json" | load-env
+source \$apply_again
+if (\$env.PROJECT_ROOT? | default "") != "$TMPDIR/project" {
+  error make { msg: "setup-like env did not restore after returning" }
+}
+EOF
+run_nu "$TMPDIR/setup-roundtrip-test.nu"

@@ -212,7 +212,9 @@
           source "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
           open "$TMPDIR/inherited-b.json" | load-env
           source \$apply_a
+          cd "$TMPDIR/project-b"
           source \$wrapper
+          if \$env.PWD != "$TMPDIR/project-b" { error make { msg: "project-to-project wrapper changed PWD" } }
           if (build) != "built-b" { error make { msg: "project B build command did not replace project A build command" } }
           if (b_only) != "b-only" { error make { msg: "project B unique command did not load" } }
           if ((scope commands | where name == st | is-not-empty)) { error make { msg: "project A command leaked into project B" } }
@@ -320,6 +322,31 @@
           }
           EOF
           ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/stale-cleanup-test.nu"
+
+          # Repeated cleanup sources are common because pre_prompt runs on every
+          # Enter. They must be idempotent and must not move PWD, even after the
+          # user has changed to another unmanaged directory.
+          mkdir -p "$TMPDIR/elsewhere/deep"
+          cat > "$TMPDIR/repeated-pwd-test.nu" <<EOF
+          const apply = '$reloaded_apply'
+          const cleanup = '$stale_cleanup'
+          source \$apply
+          cd "$TMPDIR/elsewhere"
+          source \$cleanup
+          if \$env.PWD != "$TMPDIR/elsewhere" {
+            error make { msg: "first cleanup changed PWD" }
+          }
+          cd "$TMPDIR/elsewhere/deep"
+          source \$cleanup
+          if \$env.PWD != "$TMPDIR/elsewhere/deep" {
+            error make { msg: "second cleanup changed PWD" }
+          }
+          source \$cleanup
+          if \$env.PWD != "$TMPDIR/elsewhere/deep" {
+            error make { msg: "idempotent cleanup changed PWD" }
+          }
+          EOF
+          ${pkgs.nushell}/bin/nu --no-config-file "$TMPDIR/repeated-pwd-test.nu"
 
           # runCommand outputs must create $out on success.
           touch "$out"

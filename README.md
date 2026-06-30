@@ -131,11 +131,11 @@ $env.NU_DIRENV_OVERLAY_EXPORTS = (
 ```
 
 Internally, the actual Nushell overlay names are generated as private
-`nu-direnv-<uid>-...` names from the project, overlay path, and current direnv
-evaluation. They are not a user-facing contract. This avoids user-managed names
-and prevents hidden definitions from an old evaluation from shadowing the same
-command when a project is applied again. Exported commands keep their original
-names; for example, `overlay/task.nu` can still expose `build`.
+`nu-direnv-<uid>-...` names from the project path and overlay path. They are not
+a user-facing contract. This avoids user-managed names while keeping the
+internal module identity stable when the same project is applied again. Exported
+commands keep their original names; for example, `overlay/task.nu` can still
+expose `build`.
 
 The generated `apply.nu` loads the new overlays and records only Nushell overlay
 state: active internal overlay names, exported definition names, and

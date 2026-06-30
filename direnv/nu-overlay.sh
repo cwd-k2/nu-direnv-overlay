@@ -41,12 +41,12 @@ __nu_direnv_overlay_dir() {
 }
 
 __nu_direnv_overlay_prefix() {
-  # Internal overlay names are project-owned implementation details. Include the
-  # per-evaluation temp directory so a command hidden during cleanup does not
-  # shadow the same command when the project is applied again later.
+  # Internal overlay names are project-owned implementation details. Keep them
+  # stable for a project path so re-entering the same project reloads the same
+  # Nushell module identity after cleanup.
   if [[ -z ${__NU_DIRENV_OVERLAY_PREFIX:-} ]]; then
     local sum
-    sum=$(printf '%s:%s' "$PWD" "$(__nu_direnv_overlay_dir)" | cksum)
+    sum=$(printf '%s' "$PWD" | cksum)
     __NU_DIRENV_OVERLAY_PREFIX="nu-direnv-$(id -u)-${sum%% *}"
   fi
 

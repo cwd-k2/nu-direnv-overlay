@@ -5,6 +5,8 @@ prepare_repl_fixture() {
     "$TMPDIR/repl-home/.config/direnv" \
     "$TMPDIR/repl-home/.cache/nushell/nu-direnv-overlay" \
     "$TMPDIR/repl-setup/overlay" \
+    "$TMPDIR/repl-quitter/overlay" \
+    "$TMPDIR/repl-worktree" \
     "$TMPDIR/repl-outside"
   printf 'source %q\n' "$direnv_lib" >"$TMPDIR/repl-home/.config/direnv/direnvrc"
   touch "$TMPDIR/repl-home/home-only.txt"
@@ -18,8 +20,24 @@ EOF
 export def setup_hi [] { "hi" }
 EOF
 
+  cat >"$TMPDIR/repl-quitter/.envrc" <<'EOF'
+export quitter_repo_root="$PWD"
+use nu-overlay overlay/task.nu
+EOF
+  cat >"$TMPDIR/repl-quitter/overlay/task.nu" <<'EOF'
+export def quitter_hi [] { "quit" }
+EOF
+
   (
     cd "$TMPDIR/repl-setup"
+    HOME="$TMPDIR/repl-home" \
+      XDG_CONFIG_HOME="$TMPDIR/repl-home/.config" \
+      XDG_DATA_HOME="$TMPDIR/repl-home/.local/share" \
+      XDG_CACHE_HOME="$TMPDIR/repl-home/.cache" \
+      "$DIRENV" allow . >/dev/null
+  )
+  (
+    cd "$TMPDIR/repl-quitter"
     HOME="$TMPDIR/repl-home" \
       XDG_CONFIG_HOME="$TMPDIR/repl-home/.config" \
       XDG_DATA_HOME="$TMPDIR/repl-home/.local/share" \
@@ -88,6 +106,51 @@ run_repl_state_regressions() {
     }
     if "outside-only.txt" not-in $state.files {
       error make { msg: "prompt-time file view was not based on unmanaged directory" }
+    }
+  '
+
+  # Regression for repeated project/unmanaged/project transitions. Active
+  # overlay frames are intentionally deferred, but exported commands must not
+  # stay visible in unrelated directories or projects after several prompt
+  # cycles.
+  rm -f "$TMPDIR/repl-navigation-states.nuon"
+  "$NU" --testbin=nu_repl \
+    "$repl_env; "'source "'"$repl_autoload"'"; $env.__TEST_NAV_STATES = []; $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt | append {|| let pwd = (pwd); if ($pwd | str starts-with "'"$TMPDIR"'") { let row = { pwd: $pwd, setup_visible: (scope commands | where name == setup_hi | is-not-empty), quitter_visible: (scope commands | where name == quitter_hi | is-not-empty), apply: ($env.DIRENV_NU_OVERLAY_APPLY? | default ""), active: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default ""), exports: ($env.NU_DIRENV_OVERLAY_EXPORTS? | default ""), loaded: ($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default ""), frames: (overlay list | where name =~ "^nu-direnv-" and active == true | get name) }; $env.__TEST_NAV_STATES = ($env.__TEST_NAV_STATES | append $row); $env.__TEST_NAV_STATES | to nuon | save --force "'"$TMPDIR/repl-navigation-states.nuon"'" } })' \
+    'cd "'"$TMPDIR/repl-setup"'"' \
+    'cd "'"$TMPDIR/repl-home"'"' \
+    'cd "'"$TMPDIR/repl-quitter"'"' \
+    'cd "'"$TMPDIR/repl-outside"'"' \
+    'cd "'"$TMPDIR/repl-setup"'"' \
+    'cd "'"$TMPDIR/repl-worktree"'"' \
+    'cd "'"$TMPDIR/repl-quitter"'"' \
+    'cd "'"$TMPDIR/repl-home"'"' \
+    '"done"'
+
+  run_nu --commands '
+    let states = (open "'"$TMPDIR/repl-navigation-states.nuon"'")
+    for state in $states {
+      if $state.pwd == "'"$TMPDIR/repl-setup"'" {
+        if not $state.setup_visible {
+          error make { msg: "setup command was not visible inside setup project" }
+        }
+        if $state.quitter_visible {
+          error make { msg: "quitter command leaked into setup project" }
+        }
+      } else if $state.pwd == "'"$TMPDIR/repl-quitter"'" {
+        if not $state.quitter_visible {
+          error make { msg: "quitter command was not visible inside quitter project" }
+        }
+        if $state.setup_visible {
+          error make { msg: "setup command leaked into quitter project" }
+        }
+      } else if $state.pwd in ["'"$TMPDIR/repl-home"'" "'"$TMPDIR/repl-outside"'" "'"$TMPDIR/repl-worktree"'"] {
+        if $state.setup_visible or $state.quitter_visible {
+          error make { msg: $"project command leaked into unmanaged directory: ($state | to nuon)" }
+        }
+        if $state.apply != "" {
+          error make { msg: $"unmanaged directory kept stale apply path: ($state | to nuon)" }
+        }
+      }
     }
   '
 }

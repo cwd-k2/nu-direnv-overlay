@@ -256,10 +256,11 @@ def "__nu-direnv-overlay cleanup-plan-only" [] {
   # Prompt-time cleanup must not hide active overlay frames because that can
   # leave Reedline completion with a stale cwd. Deferred frames are hidden by
   # the next project apply, which runs cleanup before loading fresh overlays.
+  # Keep the active marker so that later apply can still identify the deferred
+  # frames after cleanup-only has hidden exported definitions.
   (__nu-direnv-overlay cleanup-plan --hide-overlays=false) ++ [
     { type: line, source: 'hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors' }
     { type: line, source: '$env.DIRENV_NU_OVERLAY_APPLY = ""' }
-    { type: line, source: '$env.NU_DIRENV_OVERLAY_ACTIVE = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_EXPORTS = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_NAMES = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_BEFORE = ""' }

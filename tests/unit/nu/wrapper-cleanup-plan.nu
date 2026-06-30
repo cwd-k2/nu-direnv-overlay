@@ -18,7 +18,7 @@ assert equal (
 ) 1 "cleanup plan did not hide stale apply state"
 assert equal (
   $cleanup_plan.actions | where type == line and source == '$env.NU_DIRENV_OVERLAY_ACTIVE = ""' | length
-) 1 "cleanup plan did not reset active overlay tracking"
+) 0 "cleanup plan reset active overlay tracking before deferred frame cleanup"
 assert equal (
   $cleanup_plan.actions | where type == hide_overlay | length
 ) 0 "cleanup-only plan should not hide active overlay frames"

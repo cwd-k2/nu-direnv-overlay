@@ -150,6 +150,22 @@ run_integration_wrapper_transition_tests() {
     apply_a "$reloaded_apply" \
     wrapper "$project_to_project_wrapper"
 
+  exit_then_project_cleanup="$TMPDIR/exit-then-project-cleanup.nu"
+  exit_then_project_apply_b="$TMPDIR/exit-then-project-apply-b.nu"
+  : >"$exit_then_project_cleanup"
+  run_nu_test integration exit-then-project-generate \
+    inherited_json "$TMPDIR/inherited.json" \
+    inherited_b_json "$TMPDIR/inherited-b.json" \
+    apply_a "$reloaded_apply" \
+    cleanup_wrapper "$exit_then_project_cleanup" \
+    apply_b_wrapper "$exit_then_project_apply_b"
+  run_nu_test integration exit-then-project \
+    inherited_json "$TMPDIR/inherited.json" \
+    inherited_b_json "$TMPDIR/inherited-b.json" \
+    apply_a "$reloaded_apply" \
+    cleanup_wrapper "$exit_then_project_cleanup" \
+    apply_b_wrapper "$exit_then_project_apply_b"
+
   stale_cleanup=$(
     run_nu_test_stdout integration stale-cleanup-generate apply "$reloaded_apply"
   )

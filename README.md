@@ -53,7 +53,9 @@ direnv allow
 ```
 
 Inside the project, `build`, `test`, and `st` are available. After leaving the
-directory, the overlays are hidden again.
+directory, exported command names are hidden from the interactive scope. The
+internal overlay frame can remain active until the next project overlay is
+applied; see [Cleanup Limits](#cleanup-limits).
 
 Globs and explicit overlay names are intentionally not supported. List overlays
 one per line instead:
@@ -177,6 +179,46 @@ the project overlay, but if you manually define another command, alias, extern,
 constant, or module with the same name in the same interactive scope, cleanup
 can hide that manual definition too. Prefer distinct names for ad-hoc shell
 definitions when they overlap with project overlay exports.
+
+## Cleanup Limits
+
+### Why Overlay Cleanup Is Deferred
+
+When leaving a directory, `nu-direnv-overlay` intentionally does not immediately
+run `overlay hide` for the active project overlays. Hiding overlay frames from a
+prompt-time hook can leave Reedline path completion with stale current-directory
+state. In practice, command definitions can be removed safely at prompt time,
+but hiding the overlay frame itself can disturb the shell state that completion
+uses for the next prompt. For that reason, overlay-frame cleanup is deferred
+until the next project overlay apply, where it runs before loading the new
+overlays.
+
+### What Cleanup Does
+
+Leaving a directory therefore uses split cleanup:
+
+- exported definitions recorded in `NU_DIRENV_OVERLAY_EXPORTS` are hidden
+  immediately;
+- environment changes made by overlay `export-env` blocks are restored when the
+  current value still matches the value applied by the overlay;
+- ordinary `.envrc` environment changes are left to direnv's normal unload;
+- the private `nu-direnv-...` overlay frames and
+  `NU_DIRENV_OVERLAY_ACTIVE` marker can remain until the next project overlay
+  apply, where they are hidden before loading the new overlays.
+
+The user-visible contract is that project commands and project environment
+changes should disappear after leaving the directory. The internal overlay
+frames are an implementation detail and may still appear in `overlay list`
+between projects. Operationally, this is close to leaving an active but
+user-empty private overlay frame behind: the frame exists so it can be hidden
+later, while its exported names and owned environment changes are cleaned up.
+
+This cleanup is not a complete snapshot/rollback of every possible Nushell
+scope mutation. It relies on the generated apply file's recorded overlay names,
+exported definition names, and `export-env` changes. If project code or ad-hoc
+interactive code mutates unrelated shell state, or defines names that collide
+with project exports, `nu-direnv-overlay` does not try to infer ownership beyond
+those recorded values.
 
 ## Security Model
 

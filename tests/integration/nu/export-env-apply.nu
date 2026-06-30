@@ -9,6 +9,16 @@ source $apply_wrapper
 assert equal $env.EXPORT_ENV_MARK "overlay" "overlay export-env did not update an existing env value"
 assert equal $env.EXPORT_ENV_NEW "new" "overlay export-env did not create a new env value"
 
+$env.EXPORT_ENV_MARK = "outside"
+$env.EXPORT_ENV_NEW = "outside-new"
+source $cleanup_wrapper
+
+assert equal $env.EXPORT_ENV_MARK "outside" "cleanup overwrote env value changed after overlay export-env"
+assert equal $env.EXPORT_ENV_NEW "outside-new" "cleanup removed env value changed after overlay export-env"
+
+$env.EXPORT_ENV_MARK = "before"
+hide-env EXPORT_ENV_NEW --ignore-errors
+source $apply_wrapper
 source $cleanup_wrapper
 
 assert equal $env.EXPORT_ENV_MARK "before" "cleanup did not restore env value changed by overlay export-env"

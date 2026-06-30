@@ -10,6 +10,7 @@ $env.NU_DIRENV_OVERLAY_EXPORTS = (["unit_build" "unit_st"] | str join (char us))
 $env.NU_DIRENV_OVERLAY_ENV_NAMES = (["UNIT_ENV_OLD" "UNIT_ENV_NEW"] | str join (char us))
 $env.NU_DIRENV_OVERLAY_ENV_BEFORE = { UNIT_ENV_OLD: "before" } | to nuon
 $env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES = [UNIT_ENV_OLD] | to nuon
+$env.NU_DIRENV_OVERLAY_ENV_AFTER = { UNIT_ENV_OLD: "after" UNIT_ENV_NEW: "new" } | to nuon
 
 let cleanup_plan = (__nu-direnv-overlay wrapper-plan --cleanup-only)
 assert equal $cleanup_plan.type cleanup "cleanup-only wrapper plan did not choose cleanup"
@@ -40,6 +41,7 @@ hide-env NU_DIRENV_OVERLAY_EXPORTS --ignore-errors
 hide-env NU_DIRENV_OVERLAY_ENV_NAMES --ignore-errors
 hide-env NU_DIRENV_OVERLAY_ENV_BEFORE --ignore-errors
 hide-env NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES --ignore-errors
+hide-env NU_DIRENV_OVERLAY_ENV_AFTER --ignore-errors
 $env.NU_DIRENV_OVERLAY_APPLY_LOADED = ($tmpdir | path join "unit-wrapper-plan-old-apply.nu")
 $env.NU_DIRENV_OVERLAY_APPLY_PWD = (pwd)
 
@@ -63,6 +65,7 @@ hide-env NU_DIRENV_OVERLAY_EXPORTS --ignore-errors
 hide-env NU_DIRENV_OVERLAY_ENV_NAMES --ignore-errors
 hide-env NU_DIRENV_OVERLAY_ENV_BEFORE --ignore-errors
 hide-env NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES --ignore-errors
+hide-env NU_DIRENV_OVERLAY_ENV_AFTER --ignore-errors
 hide-env NU_DIRENV_OVERLAY_APPLY_LOADED --ignore-errors
 hide-env NU_DIRENV_OVERLAY_APPLY_PWD --ignore-errors
 

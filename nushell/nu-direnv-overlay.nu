@@ -66,7 +66,7 @@ def "__nu-direnv-overlay current-env-record" [] {
   # with `load-env`. Prompt closures such as starship's PROMPT_COMMAND belong to
   # the user's config and cannot be represented safely in NUON.
   $env
-  | reject --optional PWD FILE_PWD CURRENT_FILE config LAST_EXIT_CODE __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES __NU_DIRENV_OVERLAY_LAST_EXIT_CODE __NU_DIRENV_OVERLAY_PWD NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_ENV_NAMES NU_DIRENV_OVERLAY_ENV_BEFORE NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
+  | reject --optional PWD FILE_PWD CURRENT_FILE config LAST_EXIT_CODE __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES __NU_DIRENV_OVERLAY_LAST_EXIT_CODE __NU_DIRENV_OVERLAY_PWD NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_ENV_NAMES NU_DIRENV_OVERLAY_ENV_BEFORE NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES NU_DIRENV_OVERLAY_ENV_AFTER NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
   | transpose name value
   | where {|row| ($row.value | describe) !~ "closure" }
   | transpose --header-row --as-record
@@ -132,8 +132,8 @@ def "__nu-direnv-overlay hide-export-line" [name: string] {
   $"hide ((__nu-direnv-overlay quote $name))"
 }
 
-def "__nu-direnv-overlay restore-overlay-env-line" [names: string, before_env: string, before_names: string] {
-  $"let __nu_direnv_overlay_env_before = ($before_env); let __nu_direnv_overlay_env_before_names = ($before_names); for name in ($names) { if $name in $__nu_direnv_overlay_env_before_names { load-env { $name: \($__nu_direnv_overlay_env_before | get $name\) } } else { hide-env $name --ignore-errors } }"
+def "__nu-direnv-overlay restore-overlay-env-line" [names: string, before_env: string, before_names: string, after_env: string] {
+  $"let __nu_direnv_overlay_env_before = ($before_env); let __nu_direnv_overlay_env_before_names = ($before_names); let __nu_direnv_overlay_env_after = ($after_env); for name in ($names) { let applied_value = \($__nu_direnv_overlay_env_after | get --optional $name\); let current_value = \($env | get --optional $name\); if $current_value == $applied_value { if $name in $__nu_direnv_overlay_env_before_names { load-env { $name: \($__nu_direnv_overlay_env_before | get $name\) } } else { hide-env $name --ignore-errors } } }"
 }
 
 def "__nu-direnv-overlay cleanup-plan" [--hide-overlays] {
@@ -146,6 +146,7 @@ def "__nu-direnv-overlay cleanup-plan" [--hide-overlays] {
   let overlay_env_names = (__nu-direnv-overlay overlay-env-names)
   let overlay_env_before = ($env.NU_DIRENV_OVERLAY_ENV_BEFORE? | default "")
   let overlay_env_before_names = ($env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES? | default "")
+  let overlay_env_after = ($env.NU_DIRENV_OVERLAY_ENV_AFTER? | default "")
   let hide_overlays = if $hide_overlays {
     __nu-direnv-overlay active-names | each {|name|
       {
@@ -166,6 +167,7 @@ def "__nu-direnv-overlay cleanup-plan" [--hide-overlays] {
       names: ($overlay_env_names | to nuon)
       before_env: (if $overlay_env_before == "" { "{}" } else { $overlay_env_before })
       before_names: (if $overlay_env_before_names == "" { "[]" } else { $overlay_env_before_names })
+      after_env: (if $overlay_env_after == "" { "{}" } else { $overlay_env_after })
     }
   ] }
   $hide_overlays ++ $hide_exports ++ $restore_overlay_env
@@ -182,6 +184,7 @@ def --env "__nu-direnv-overlay load-direnv-env" [] {
     NU_DIRENV_OVERLAY_ENV_NAMES: ($env.NU_DIRENV_OVERLAY_ENV_NAMES? | default null)
     NU_DIRENV_OVERLAY_ENV_BEFORE: ($env.NU_DIRENV_OVERLAY_ENV_BEFORE? | default null)
     NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES: ($env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES? | default null)
+    NU_DIRENV_OVERLAY_ENV_AFTER: ($env.NU_DIRENV_OVERLAY_ENV_AFTER? | default null)
     NU_DIRENV_OVERLAY_APPLY_LOADED: ($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default null)
     NU_DIRENV_OVERLAY_APPLY_PWD: ($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default null)
   }
@@ -265,6 +268,7 @@ def "__nu-direnv-overlay cleanup-plan-only" [] {
     { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_NAMES = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_BEFORE = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_AFTER = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_APPLY_PWD = ""' }
   ]
@@ -279,10 +283,11 @@ def "__nu-direnv-overlay cleanup-needed" [] {
   let has_env_marker = (($env.NU_DIRENV_OVERLAY_ENV_NAMES? | default "") != "")
   let has_env_before_marker = (($env.NU_DIRENV_OVERLAY_ENV_BEFORE? | default "") != "")
   let has_env_before_names_marker = (($env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES? | default "") != "")
+  let has_env_after_marker = (($env.NU_DIRENV_OVERLAY_ENV_AFTER? | default "") != "")
   let has_loaded_marker = (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != "")
   let has_pwd_marker = (($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default "") != "")
 
-  $has_exports or $has_active_overlay or $has_apply or $has_active_marker or $has_exports_marker or $has_env_marker or $has_env_before_marker or $has_env_before_names_marker or $has_loaded_marker or $has_pwd_marker
+  $has_exports or $has_active_overlay or $has_apply or $has_active_marker or $has_exports_marker or $has_env_marker or $has_env_before_marker or $has_env_before_names_marker or $has_env_after_marker or $has_loaded_marker or $has_pwd_marker
 }
 
 def "__nu-direnv-overlay ensure-source" [--reset] {
@@ -339,7 +344,7 @@ def "__nu-direnv-overlay render-action" [action: record] {
       __nu-direnv-overlay hide-export-line $action.name
     }
     "restore_overlay_env" => {
-      __nu-direnv-overlay restore-overlay-env-line $action.names $action.before_env $action.before_names
+      __nu-direnv-overlay restore-overlay-env-line $action.names $action.before_env $action.before_names $action.after_env
     }
     "source_apply" => {
       $"source ((__nu-direnv-overlay quote $action.path))"

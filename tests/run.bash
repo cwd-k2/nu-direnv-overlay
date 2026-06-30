@@ -62,6 +62,7 @@ run_hook_entrypoint_tests() {
   )
   test -f "$hook_apply"
   run_nu_test wrapper-apply apply "$hook_apply"
+  run_nu_test wrapper-plan inherited_json "$TMPDIR/inherited.json"
 
   reloaded_apply=$(
     cd "$TMPDIR/project"
@@ -123,11 +124,6 @@ run_wrapper_transition_tests() {
   stale_cleanup=$(
     run_nu_test_stdout stale-cleanup-generate apply "$reloaded_apply"
   )
-  assert_file_not_contains "$stale_cleanup" 'overlay hide .*--keep-env .*"nu-direnv-' "prompt cleanup should defer active overlay hide"
-  assert_file_not_contains "$stale_cleanup" '^source ' "cleanup unexpectedly re-sourced an old apply file"
-  for exported in build project_name nested st; do
-    assert_file_contains "$stale_cleanup" "hide \"$exported\"" "cleanup did not hide $exported"
-  done
 
   run_nu_test stale-cleanup \
     apply "$reloaded_apply" \

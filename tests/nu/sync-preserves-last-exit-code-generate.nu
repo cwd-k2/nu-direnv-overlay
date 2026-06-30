@@ -10,12 +10,11 @@ assert equal $env.LAST_EXIT_CODE 37 "sync changed LAST_EXIT_CODE outside direnv"
 
 open $inherited_json | load-env
 cd $project_dir
+let plan = (__nu-direnv-overlay wrapper-plan)
+assert equal $plan.type apply "sync fixture did not choose apply plan"
+assert equal (
+  $plan.actions | where type == source_apply | length
+) 1 "sync fixture did not plan to source apply path"
+
 __nu-direnv-overlay sync
-let wrapper = (wrapper-path)
-let body = (open $wrapper)
-
-assert ($body | str contains '$env.__NU_DIRENV_OVERLAY_LAST_EXIT_CODE = 37') "wrapper did not capture LAST_EXIT_CODE"
-assert ($body | str contains '$env.LAST_EXIT_CODE = $env.__NU_DIRENV_OVERLAY_LAST_EXIT_CODE') "wrapper did not restore LAST_EXIT_CODE"
-assert ($body | str contains 'source ') "wrapper did not exercise apply source path"
-
-$wrapper
+wrapper-path

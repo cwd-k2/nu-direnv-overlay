@@ -130,18 +130,26 @@ def "__nu-direnv-overlay hide-export-line" [name: string] {
   $"hide ((__nu-direnv-overlay quote $name))"
 }
 
-def "__nu-direnv-overlay cleanup-lines" [--hide-overlays] {
+def "__nu-direnv-overlay cleanup-plan" [--hide-overlays] {
   # Ordering matters. Hide overlays first so their env layer is removed, then
   # hide exported definitions that Nushell may otherwise leave in scope.
   let keep_env = (__nu-direnv-overlay current-env-literal)
   let keep_names = (__nu-direnv-overlay current-env-names-literal)
   let preserve_names = (__nu-direnv-overlay preserve-env-names-literal)
   let hide_overlays = if $hide_overlays {
-    __nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name $keep_env $keep_names $preserve_names }
+    __nu-direnv-overlay active-names | each {|name|
+      {
+        type: hide_overlay
+        name: $name
+        keep_env: $keep_env
+        keep_names: $keep_names
+        preserve_names: $preserve_names
+      }
+    }
   } else {
     []
   }
-  let hide_exports = (__nu-direnv-overlay exported-names | each {|name| __nu-direnv-overlay hide-export-line $name })
+  let hide_exports = (__nu-direnv-overlay exported-names | each {|name| { type: hide_export, name: $name } })
   $hide_overlays ++ $hide_exports
 }
 
@@ -212,32 +220,30 @@ def "__nu-direnv-overlay apply-path" [--cleanup-only] {
   }
 }
 
-def "__nu-direnv-overlay apply-wrapper-lines" [apply: string] {
+def "__nu-direnv-overlay apply-plan" [apply: string] {
   # Every apply starts with cleanup. direnv can rebuild the apply file when
   # .envrc changes, and repeated `overlay use --reload` without hiding first can
   # leave old exported definitions visible.
-  let quoted = (__nu-direnv-overlay quote $apply)
-  let quoted_pwd = (__nu-direnv-overlay quote (pwd))
   let keep_env = (__nu-direnv-overlay current-env-literal)
-  (__nu-direnv-overlay cleanup-lines --hide-overlays) ++ [
-    $"source ($quoted)"
-    $"$env.NU_DIRENV_OVERLAY_APPLY_PWD = ($quoted_pwd)"
-    $"load-env ($keep_env)"
+  (__nu-direnv-overlay cleanup-plan --hide-overlays) ++ [
+    { type: source_apply, path: $apply }
+    { type: mark_apply_pwd, pwd: (pwd) }
+    { type: load_env, env: $keep_env }
   ]
 }
 
-def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
+def "__nu-direnv-overlay cleanup-plan-only" [] {
   # When direnv unloads a directory, there is no project apply file anymore.
   # Prompt-time cleanup must not hide active overlay frames because that can
   # leave Reedline completion with a stale cwd. Deferred frames are hidden by
   # the next project apply, which runs cleanup before loading fresh overlays.
-  (__nu-direnv-overlay cleanup-lines --hide-overlays=false) ++ [
-    'hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors'
-    '$env.DIRENV_NU_OVERLAY_APPLY = ""'
-    '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
-    '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
-    '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""'
-    '$env.NU_DIRENV_OVERLAY_APPLY_PWD = ""'
+  (__nu-direnv-overlay cleanup-plan --hide-overlays=false) ++ [
+    { type: line, source: 'hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors' }
+    { type: line, source: '$env.DIRENV_NU_OVERLAY_APPLY = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_ACTIVE = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_EXPORTS = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_APPLY_PWD = ""' }
   ]
 }
 
@@ -282,23 +288,56 @@ def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
   $tracked == $active
 }
 
-def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
+def "__nu-direnv-overlay wrapper-plan" [--cleanup-only] {
   let apply = (__nu-direnv-overlay apply-path --cleanup-only=$cleanup_only)
+
+  if (__nu-direnv-overlay apply-already-loaded $apply) {
+    { type: noop, apply: $apply, actions: [] }
+  } else if ($apply != "" and ($apply | path exists)) {
+    { type: apply, apply: $apply, actions: (__nu-direnv-overlay apply-plan $apply) }
+  } else if not (__nu-direnv-overlay cleanup-needed) {
+    { type: noop, apply: $apply, actions: [] }
+  } else {
+    # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
+    # cannot produce an apply file for the old overlays.
+    { type: cleanup, apply: $apply, actions: (__nu-direnv-overlay cleanup-plan-only) }
+  }
+}
+
+def "__nu-direnv-overlay render-action" [action: record] {
+  match $action.type {
+    "hide_overlay" => {
+      __nu-direnv-overlay hide-overlay-line $action.name $action.keep_env $action.keep_names $action.preserve_names
+    }
+    "hide_export" => {
+      __nu-direnv-overlay hide-export-line $action.name
+    }
+    "source_apply" => {
+      $"source ((__nu-direnv-overlay quote $action.path))"
+    }
+    "mark_apply_pwd" => {
+      $"$env.NU_DIRENV_OVERLAY_APPLY_PWD = ((__nu-direnv-overlay quote $action.pwd))"
+    }
+    "load_env" => {
+      $"load-env ($action.env)"
+    }
+    "line" => {
+      $action.source
+    }
+  }
+}
+
+def "__nu-direnv-overlay render-wrapper-plan" [plan: record] {
+  $plan.actions | each {|action| __nu-direnv-overlay render-action $action }
+}
+
+def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
   let last_exit_code = ($env.LAST_EXIT_CODE? | default null)
   mkdir ($overlay_source | path dirname)
   "" | save --force $overlay_source
 
-  let body = if (__nu-direnv-overlay apply-already-loaded $apply) {
-    []
-  } else if ($apply != "" and ($apply | path exists)) {
-    __nu-direnv-overlay apply-wrapper-lines $apply
-  } else if not (__nu-direnv-overlay cleanup-needed) {
-    []
-  } else {
-    # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
-    # cannot produce an apply file for the old overlays.
-    __nu-direnv-overlay cleanup-wrapper-lines
-  }
+  let plan = (__nu-direnv-overlay wrapper-plan --cleanup-only=$cleanup_only)
+  let body = (__nu-direnv-overlay render-wrapper-plan $plan)
 
   let wrapped_body = if ($body | is-empty) {
     []

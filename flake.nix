@@ -46,6 +46,7 @@
           export PKG="${self.packages.${system}.default}"
           export NU="${pkgs.nushell}/bin/nu"
           export DIRENV="${pkgs.direnv}/bin/direnv"
+          export EXPECT="${pkgs.expect}/bin/expect"
           export TEST_DIR="${./tests}"
 
           ${pkgs.bash}/bin/bash ${./tests/run.bash}

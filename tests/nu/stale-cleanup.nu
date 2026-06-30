@@ -15,4 +15,4 @@ assert equal ($env.PROJECT_MARK? | default "") "outside" "cleanup did not preser
 assert equal (do $env.PROMPT_COMMAND) "prompt" "cleanup removed prompt closure"
 assert-command-hidden "build" "overlay build command remained visible after cleanup"
 assert-command-hidden "st" "overlay st command remained visible after cleanup"
-assert-no-active-overlays
+assert-active-overlay-count 2 "cleanup should defer active overlay hide outside direnv"

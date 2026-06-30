@@ -7,6 +7,7 @@ cd $tmpdir
 jump root
 
 assert equal $env.PWD $project_dir "overlay command did not cd to project root"
+$env.NU_DIRENV_OVERLAY_APPLY_PWD = (pwd)
 __nu-direnv-overlay write-source
 
 let wrapper = (wrapper-path)

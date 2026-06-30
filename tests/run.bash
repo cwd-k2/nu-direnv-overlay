@@ -86,7 +86,7 @@ run_nu_test project-to-project \
 stale_cleanup=$(
   run_nu_test_stdout stale-cleanup-generate apply "$reloaded_apply"
 )
-assert_file_contains "$stale_cleanup" 'overlay hide --keep-env .*"nu-direnv-' "cleanup did not include active nu-direnv overlay"
+assert_file_not_contains "$stale_cleanup" 'overlay hide --keep-env .*"nu-direnv-' "unmanaged cleanup should defer active overlay hide"
 assert_file_not_contains "$stale_cleanup" '^source ' "cleanup unexpectedly re-sourced an old apply file"
 for exported in build project_name nested st; do
   assert_file_contains "$stale_cleanup" "hide \"$exported\"" "cleanup did not hide $exported"

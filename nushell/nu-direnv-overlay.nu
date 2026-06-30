@@ -60,7 +60,7 @@ def "__nu-direnv-overlay current-env-record" [] {
   # with `load-env`. Prompt closures such as starship's PROMPT_COMMAND belong to
   # the user's config and cannot be represented safely in NUON.
   $env
-  | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_APPLY_LOADED
+  | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
   | transpose name value
   | where {|row| ($row.value | describe) !~ "closure" }
   | transpose --header-row --as-record
@@ -126,13 +126,17 @@ def "__nu-direnv-overlay hide-export-line" [name: string] {
   $"hide ((__nu-direnv-overlay quote $name))"
 }
 
-def "__nu-direnv-overlay cleanup-lines" [] {
+def "__nu-direnv-overlay cleanup-lines" [--hide-overlays] {
   # Ordering matters. Hide overlays first so their env layer is removed, then
   # hide exported definitions that Nushell may otherwise leave in scope.
   let keep_env = (__nu-direnv-overlay current-env-literal)
   let keep_names = (__nu-direnv-overlay current-env-names-literal)
   let preserve_names = (__nu-direnv-overlay preserve-env-names-literal)
-  let hide_overlays = (__nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name $keep_env $keep_names $preserve_names })
+  let hide_overlays = if $hide_overlays {
+    __nu-direnv-overlay active-names | each {|name| __nu-direnv-overlay hide-overlay-line $name $keep_env $keep_names $preserve_names }
+  } else {
+    []
+  }
   let hide_exports = (__nu-direnv-overlay exported-names | each {|name| __nu-direnv-overlay hide-export-line $name })
   $hide_overlays ++ $hide_exports
 }
@@ -146,6 +150,7 @@ def --env "__nu-direnv-overlay load-direnv-env" [] {
     NU_DIRENV_OVERLAY_ACTIVE: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default null)
     NU_DIRENV_OVERLAY_EXPORTS: ($env.NU_DIRENV_OVERLAY_EXPORTS? | default null)
     NU_DIRENV_OVERLAY_APPLY_LOADED: ($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default null)
+    NU_DIRENV_OVERLAY_APPLY_PWD: ($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default null)
   }
 
   try {
@@ -208,22 +213,40 @@ def "__nu-direnv-overlay apply-wrapper-lines" [apply: string] {
   # .envrc changes, and repeated `overlay use --reload` without hiding first can
   # leave old exported definitions visible.
   let quoted = (__nu-direnv-overlay quote $apply)
+  let quoted_pwd = (__nu-direnv-overlay quote (pwd))
   let keep_env = (__nu-direnv-overlay current-env-literal)
-  (__nu-direnv-overlay cleanup-lines) ++ [
+  (__nu-direnv-overlay cleanup-lines --hide-overlays) ++ [
     $"source ($quoted)"
+    $"$env.NU_DIRENV_OVERLAY_APPLY_PWD = ($quoted_pwd)"
     $"load-env ($keep_env)"
   ]
 }
 
 def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
   # When direnv unloads a directory, there is no project apply file anymore.
-  # The wrapper still needs to remove active overlays and clear tracking env.
-  (__nu-direnv-overlay cleanup-lines) ++ [
+  # Prompt-time `overlay hide` can leave Nushell's file completer with a stale
+  # permanent cwd. Hide exported definitions and env immediately, then defer
+  # hiding active overlay frames until the next project apply can do a full
+  # cleanup before loading fresh overlays.
+  (__nu-direnv-overlay cleanup-lines --hide-overlays=false) ++ [
     'hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors'
+    '$env.DIRENV_NU_OVERLAY_APPLY = ""'
     '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
     '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
     '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""'
+    '$env.NU_DIRENV_OVERLAY_APPLY_PWD = ""'
   ]
+}
+
+def "__nu-direnv-overlay cleanup-needed" [] {
+  let has_exports = (__nu-direnv-overlay exported-names | is-not-empty)
+  let has_apply = (($env.DIRENV_NU_OVERLAY_APPLY? | default "") != "")
+  let has_active_marker = (($env.NU_DIRENV_OVERLAY_ACTIVE? | default "") != "")
+  let has_exports_marker = (($env.NU_DIRENV_OVERLAY_EXPORTS? | default "") != "")
+  let has_loaded_marker = (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != "")
+  let has_pwd_marker = (($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default "") != "")
+
+  $has_exports or $has_apply or $has_active_marker or $has_exports_marker or $has_loaded_marker or $has_pwd_marker
 }
 
 def "__nu-direnv-overlay ensure-source" [--reset] {
@@ -240,6 +263,9 @@ def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
   # already loaded and the active nu-direnv overlay set exactly matches what
   # that apply file tracks, the correct wrapper is a no-op.
   if ($apply == "" or (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != $apply)) {
+    return false
+  }
+  if (($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default "") != (pwd)) {
     return false
   }
 
@@ -261,6 +287,8 @@ def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
     []
   } else if ($apply != "" and ($apply | path exists)) {
     __nu-direnv-overlay apply-wrapper-lines $apply
+  } else if not (__nu-direnv-overlay cleanup-needed) {
+    []
   } else {
     # Leaving a directory removes DIRENV_NU_OVERLAY_APPLY. In that case direnv
     # cannot produce an apply file for the old overlays.

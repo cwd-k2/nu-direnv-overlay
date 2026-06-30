@@ -3,6 +3,7 @@ use std/assert
 source $autoload
 open $inherited_json | load-env
 source $apply
+$env.NU_DIRENV_OVERLAY_APPLY_PWD = (pwd)
 __nu-direnv-overlay write-source
 
 let wrapper = (wrapper-path)

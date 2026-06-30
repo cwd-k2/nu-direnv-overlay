@@ -1,5 +1,6 @@
 use std/assert
 
+source $autoload
 source $apply
 cd $tmpdir
 hide-env PROJECT_ROOT --ignore-errors
@@ -15,4 +16,5 @@ assert equal ($env.PROJECT_MARK? | default "") "outside" "cleanup did not preser
 assert equal (do $env.PROMPT_COMMAND) "prompt" "cleanup removed prompt closure"
 assert-command-hidden "build" "overlay build command remained visible after cleanup"
 assert-command-hidden "st" "overlay st command remained visible after cleanup"
-assert-active-overlay-count 2 "cleanup should defer active overlay hide outside direnv"
+assert-active-overlay-count 2 "prompt cleanup should defer active overlay hide outside direnv"
+assert equal (nu-direnv-overlay status | get pending_frame_cleanup) true "status did not expose deferred frame cleanup"

@@ -11,7 +11,11 @@
 #
 # This split is intentional. Prompt rendering can still be handled by the
 # user's normal direnv hook; directory changes refresh the wrapper, then prompt
-# and command hooks source it before completion or command resolution.
+# and command hooks source it before completion or command resolution. Prompt
+# cleanup hides exported definitions immediately. Active overlay frames are
+# hidden only when loading a new project overlay, because prompt-time or
+# command-time `overlay hide` before a prompt can leave Reedline path completion
+# with a stale cwd.
 
 # Stable per-session wrapper path. Hook strings are installed once, while the
 # file contents are rewritten before each command. Keep it out of /tmp so
@@ -60,7 +64,7 @@ def "__nu-direnv-overlay current-env-record" [] {
   # with `load-env`. Prompt closures such as starship's PROMPT_COMMAND belong to
   # the user's config and cannot be represented safely in NUON.
   $env
-  | reject --optional PWD FILE_PWD CURRENT_FILE config __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
+  | reject --optional PWD FILE_PWD CURRENT_FILE config LAST_EXIT_CODE __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES __NU_DIRENV_OVERLAY_LAST_EXIT_CODE __NU_DIRENV_OVERLAY_PWD NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
   | transpose name value
   | where {|row| ($row.value | describe) !~ "closure" }
   | transpose --header-row --as-record
@@ -116,7 +120,7 @@ def "__nu-direnv-overlay hide-overlay-line" [name: string, keep_env: string, kee
   # from the literal record. Automatic/special values are excluded because
   # Nushell rejects FILE_PWD/CURRENT_FILE and loading `config` can disturb
   # completions.
-  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { let __nu_direnv_overlay_preserve_names = \(($preserve_names) | where {|name| $name in \($env | columns\) }\); overlay hide --keep-env $__nu_direnv_overlay_preserve_names ($quoted); for name in \($env | reject --optional FILE_PWD CURRENT_FILE config | columns\) { if $name not-in ($keep_names) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
+  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_PWD = \(pwd\); let __nu_direnv_overlay_preserve_names = \(\(($preserve_names) ++ [\"__NU_DIRENV_OVERLAY_LAST_EXIT_CODE\", \"__NU_DIRENV_OVERLAY_PWD\"]\) | where {|name| $name in \($env | columns\) }\); overlay hide --keep-custom --keep-env $__nu_direnv_overlay_preserve_names ($quoted); cd $env.__NU_DIRENV_OVERLAY_PWD; hide-env __NU_DIRENV_OVERLAY_PWD --ignore-errors; for name in \($env | reject --optional FILE_PWD CURRENT_FILE config | columns\) { if $name not-in \(($keep_names) ++ [\"__NU_DIRENV_OVERLAY_LAST_EXIT_CODE\", \"__NU_DIRENV_OVERLAY_PWD\"]\) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
 }
 
 def "__nu-direnv-overlay hide-export-line" [name: string] {
@@ -224,10 +228,9 @@ def "__nu-direnv-overlay apply-wrapper-lines" [apply: string] {
 
 def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
   # When direnv unloads a directory, there is no project apply file anymore.
-  # Prompt-time `overlay hide` can leave Nushell's file completer with a stale
-  # permanent cwd. Hide exported definitions and env immediately, then defer
-  # hiding active overlay frames until the next project apply can do a full
-  # cleanup before loading fresh overlays.
+  # Prompt-time cleanup must not hide active overlay frames because that can
+  # leave Reedline completion with a stale cwd. Deferred frames are hidden by
+  # the next project apply, which runs cleanup before loading fresh overlays.
   (__nu-direnv-overlay cleanup-lines --hide-overlays=false) ++ [
     'hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors'
     '$env.DIRENV_NU_OVERLAY_APPLY = ""'
@@ -240,13 +243,14 @@ def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
 
 def "__nu-direnv-overlay cleanup-needed" [] {
   let has_exports = (__nu-direnv-overlay exported-names | is-not-empty)
+  let has_active_overlay = (overlay list | where name =~ '^nu-direnv-' and active == true | is-not-empty)
   let has_apply = (($env.DIRENV_NU_OVERLAY_APPLY? | default "") != "")
   let has_active_marker = (($env.NU_DIRENV_OVERLAY_ACTIVE? | default "") != "")
   let has_exports_marker = (($env.NU_DIRENV_OVERLAY_EXPORTS? | default "") != "")
   let has_loaded_marker = (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != "")
   let has_pwd_marker = (($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default "") != "")
 
-  $has_exports or $has_apply or $has_active_marker or $has_exports_marker or $has_loaded_marker or $has_pwd_marker
+  $has_exports or $has_active_overlay or $has_apply or $has_active_marker or $has_exports_marker or $has_loaded_marker or $has_pwd_marker
 }
 
 def "__nu-direnv-overlay ensure-source" [--reset] {
@@ -280,6 +284,7 @@ def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
 
 def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
   let apply = (__nu-direnv-overlay apply-path --cleanup-only=$cleanup_only)
+  let last_exit_code = ($env.LAST_EXIT_CODE? | default null)
   mkdir ($overlay_source | path dirname)
   "" | save --force $overlay_source
 
@@ -295,9 +300,20 @@ def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
     __nu-direnv-overlay cleanup-wrapper-lines
   }
 
+  let wrapped_body = if ($body | is-empty) {
+    []
+  } else {
+    [
+      $"$env.__NU_DIRENV_OVERLAY_LAST_EXIT_CODE = (($last_exit_code | to nuon))"
+    ] ++ $body ++ [
+      'if $env.__NU_DIRENV_OVERLAY_LAST_EXIT_CODE == null { hide-env LAST_EXIT_CODE --ignore-errors } else { $env.LAST_EXIT_CODE = $env.__NU_DIRENV_OVERLAY_LAST_EXIT_CODE }'
+      'hide-env __NU_DIRENV_OVERLAY_LAST_EXIT_CODE --ignore-errors'
+    ]
+  }
+
   # The source hook reads this stable path after the adjacent sync hook has
   # rewritten it for the current directory.
-  $body | str join (char newline) | save --force $overlay_source
+  $wrapped_body | str join (char newline) | save --force $overlay_source
 }
 
 def "__nu-direnv-overlay merge-hook-pair" [existing_hooks: list] {
@@ -332,18 +348,37 @@ def --env "__nu-direnv-overlay install-hooks" [--preserve-source] {
 }
 
 def --env "__nu-direnv-overlay sync" [] {
+  let last_exit_code = ($env.LAST_EXIT_CODE? | default null)
   __nu-direnv-overlay load-direnv-env
+  if $last_exit_code == null {
+    hide-env LAST_EXIT_CODE --ignore-errors
+  } else {
+    $env.LAST_EXIT_CODE = $last_exit_code
+  }
   __nu-direnv-overlay write-source
+  if $last_exit_code == null {
+    hide-env LAST_EXIT_CODE --ignore-errors
+  } else {
+    $env.LAST_EXIT_CODE = $last_exit_code
+  }
+}
+
+def "__nu-direnv-overlay active-frame-names" [] {
+  overlay list | where name =~ '^nu-direnv-' and active == true | get name
 }
 
 export def --env "nu-direnv-overlay status" [] {
   # Debug surface for users. Keep this cheap and side-effect free so it is safe
   # to run while diagnosing prompt hook behavior.
+  let active_frames = (__nu-direnv-overlay active-frame-names)
   {
     source: $overlay_source
     apply: ($env.DIRENV_NU_OVERLAY_APPLY? | default null)
     active: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
+    active_frames: $active_frames
     exports: ($env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != "")
+    cleanup_needed: (__nu-direnv-overlay cleanup-needed)
+    pending_frame_cleanup: (($env.DIRENV_NU_OVERLAY_APPLY? | default "") == "" and ($active_frames | is-not-empty))
   }
 }
 

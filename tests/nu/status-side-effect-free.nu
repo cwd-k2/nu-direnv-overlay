@@ -21,5 +21,8 @@ let after = {
 
 assert equal $status.apply $apply "status reported the wrong apply path"
 assert equal ($status.active | length) 2 "status reported the wrong active overlay count"
+assert equal ($status.active_frames | length) 2 "status reported the wrong active frame count"
 assert ("build" in $status.exports) "status did not report exported build command"
+assert equal $status.cleanup_needed true "status did not expose pending cleanup state"
+assert equal $status.pending_frame_cleanup false "status incorrectly reported pending frame cleanup inside project"
 assert equal $after $before "status changed shell state"

@@ -72,6 +72,13 @@ run_hook_entrypoint_tests() {
   run_nu_test status-side-effect-free \
     inherited_json "$TMPDIR/inherited.json" \
     apply "$reloaded_apply"
+  last_exit_wrapper=$(
+    run_nu_test_stdout sync-preserves-last-exit-code-generate \
+      inherited_json "$TMPDIR/inherited.json"
+  )
+  run_nu_test sync-preserves-last-exit-code \
+    inherited_json "$TMPDIR/inherited.json" \
+    wrapper "$last_exit_wrapper"
 }
 
 run_wrapper_transition_tests() {
@@ -116,7 +123,7 @@ run_wrapper_transition_tests() {
   stale_cleanup=$(
     run_nu_test_stdout stale-cleanup-generate apply "$reloaded_apply"
   )
-  assert_file_not_contains "$stale_cleanup" 'overlay hide --keep-env .*"nu-direnv-' "unmanaged cleanup should defer active overlay hide"
+  assert_file_not_contains "$stale_cleanup" 'overlay hide .*--keep-env .*"nu-direnv-' "prompt cleanup should defer active overlay hide"
   assert_file_not_contains "$stale_cleanup" '^source ' "cleanup unexpectedly re-sourced an old apply file"
   for exported in build project_name nested st; do
     assert_file_contains "$stale_cleanup" "hide \"$exported\"" "cleanup did not hide $exported"

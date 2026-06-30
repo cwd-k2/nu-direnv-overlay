@@ -37,12 +37,10 @@ def --env "__nu-direnv-overlay quote" [value: string] {
 }
 
 def "__nu-direnv-overlay active-names" [] {
-  # Keep both sources:
-  # - NU_DIRENV_OVERLAY_ACTIVE is the last apply file's tracked set.
-  # - `overlay list` catches active overlays if env tracking was cleared first.
-  let tracked = ($env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "")
-  let active = (overlay list | where name =~ '^nu-direnv-' and active == true | get name)
-  $tracked ++ $active | uniq
+  # Cleanup must only touch overlays tracked by the last generated apply file.
+  # `overlay list` is still useful for diagnostics, but using it as ownership
+  # input can hide user/third-party overlays or bake stale frames into wrappers.
+  $env.NU_DIRENV_OVERLAY_ACTIVE? | default "" | split row ";" | where $it != "" | uniq
 }
 
 def "__nu-direnv-overlay exported-names" [] {
@@ -51,6 +49,10 @@ def "__nu-direnv-overlay exported-names" [] {
   # broad here: in some Nushell versions a loaded module can report inherited
   # commands, and hiding those can remove builtins such as `print`.
   $env.NU_DIRENV_OVERLAY_EXPORTS? | default "" | split row (char us) | where $it != "" | uniq
+}
+
+def "__nu-direnv-overlay overlay-env-names" [] {
+  $env.NU_DIRENV_OVERLAY_ENV_NAMES? | default "" | split row (char us) | where $it != "" | uniq
 }
 
 def "__nu-direnv-overlay current-env-record" [] {
@@ -64,7 +66,7 @@ def "__nu-direnv-overlay current-env-record" [] {
   # with `load-env`. Prompt closures such as starship's PROMPT_COMMAND belong to
   # the user's config and cannot be represented safely in NUON.
   $env
-  | reject --optional PWD FILE_PWD CURRENT_FILE config LAST_EXIT_CODE __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES __NU_DIRENV_OVERLAY_LAST_EXIT_CODE __NU_DIRENV_OVERLAY_PWD NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
+  | reject --optional PWD FILE_PWD CURRENT_FILE config LAST_EXIT_CODE __NU_DIRENV_OVERLAY_KEEP_ENV __NU_DIRENV_OVERLAY_KEEP_NAMES __NU_DIRENV_OVERLAY_PRESERVE_NAMES __NU_DIRENV_OVERLAY_LAST_EXIT_CODE __NU_DIRENV_OVERLAY_PWD NU_DIRENV_OVERLAY_ACTIVE NU_DIRENV_OVERLAY_EXPORTS NU_DIRENV_OVERLAY_ENV_NAMES NU_DIRENV_OVERLAY_ENV_BEFORE NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES NU_DIRENV_OVERLAY_APPLY_LOADED NU_DIRENV_OVERLAY_APPLY_PWD
   | transpose name value
   | where {|row| ($row.value | describe) !~ "closure" }
   | transpose --header-row --as-record
@@ -120,7 +122,7 @@ def "__nu-direnv-overlay hide-overlay-line" [name: string, keep_env: string, kee
   # from the literal record. Automatic/special values are excluded because
   # Nushell rejects FILE_PWD/CURRENT_FILE and loading `config` can disturb
   # completions.
-  $"if \(\(overlay list | where name == ($quoted) and active == true | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_PWD = \(pwd\); let __nu_direnv_overlay_preserve_names = \(\(($preserve_names) ++ [\"__NU_DIRENV_OVERLAY_LAST_EXIT_CODE\", \"__NU_DIRENV_OVERLAY_PWD\"]\) | where {|name| $name in \($env | columns\) }\); overlay hide --keep-custom --keep-env $__nu_direnv_overlay_preserve_names ($quoted); cd $env.__NU_DIRENV_OVERLAY_PWD; hide-env __NU_DIRENV_OVERLAY_PWD --ignore-errors; for name in \($env | reject --optional FILE_PWD CURRENT_FILE config | columns\) { if $name not-in \(($keep_names) ++ [\"__NU_DIRENV_OVERLAY_LAST_EXIT_CODE\", \"__NU_DIRENV_OVERLAY_PWD\"]\) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
+  $"if \(\(overlay list | where {|overlay| $overlay.name == ($quoted) and $overlay.active == true } | is-not-empty\)\) { $env.__NU_DIRENV_OVERLAY_PWD = \(pwd\); let __nu_direnv_overlay_preserve_names = \(\(($preserve_names) ++ [\"__NU_DIRENV_OVERLAY_LAST_EXIT_CODE\", \"__NU_DIRENV_OVERLAY_PWD\"]\) | where {|name| $name in \($env | columns\) }\); overlay hide --keep-custom --keep-env $__nu_direnv_overlay_preserve_names ($quoted); cd $env.__NU_DIRENV_OVERLAY_PWD; hide-env __NU_DIRENV_OVERLAY_PWD --ignore-errors; for name in \($env | reject --optional FILE_PWD CURRENT_FILE config | columns\) { if $name not-in \(($keep_names) ++ [\"__NU_DIRENV_OVERLAY_LAST_EXIT_CODE\", \"__NU_DIRENV_OVERLAY_PWD\"]\) { hide-env $name --ignore-errors } }; load-env ($keep_env) }"
 }
 
 def "__nu-direnv-overlay hide-export-line" [name: string] {
@@ -130,12 +132,20 @@ def "__nu-direnv-overlay hide-export-line" [name: string] {
   $"hide ((__nu-direnv-overlay quote $name))"
 }
 
+def "__nu-direnv-overlay restore-overlay-env-line" [names: string, before_env: string, before_names: string] {
+  $"let __nu_direnv_overlay_env_before = ($before_env); let __nu_direnv_overlay_env_before_names = ($before_names); for name in ($names) { if $name in $__nu_direnv_overlay_env_before_names { load-env { $name: \($__nu_direnv_overlay_env_before | get $name\) } } else { hide-env $name --ignore-errors } }"
+}
+
 def "__nu-direnv-overlay cleanup-plan" [--hide-overlays] {
   # Ordering matters. Hide overlays first so their env layer is removed, then
-  # hide exported definitions that Nushell may otherwise leave in scope.
+  # hide exported definitions that Nushell may otherwise leave in scope. Finally
+  # restore environment values changed by overlay `export-env` blocks.
   let keep_env = (__nu-direnv-overlay current-env-literal)
   let keep_names = (__nu-direnv-overlay current-env-names-literal)
   let preserve_names = (__nu-direnv-overlay preserve-env-names-literal)
+  let overlay_env_names = (__nu-direnv-overlay overlay-env-names)
+  let overlay_env_before = ($env.NU_DIRENV_OVERLAY_ENV_BEFORE? | default "")
+  let overlay_env_before_names = ($env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES? | default "")
   let hide_overlays = if $hide_overlays {
     __nu-direnv-overlay active-names | each {|name|
       {
@@ -150,7 +160,15 @@ def "__nu-direnv-overlay cleanup-plan" [--hide-overlays] {
     []
   }
   let hide_exports = (__nu-direnv-overlay exported-names | each {|name| { type: hide_export, name: $name } })
-  $hide_overlays ++ $hide_exports
+  let restore_overlay_env = if ($overlay_env_names | is-empty) { [] } else { [
+    {
+      type: restore_overlay_env
+      names: ($overlay_env_names | to nuon)
+      before_env: (if $overlay_env_before == "" { "{}" } else { $overlay_env_before })
+      before_names: (if $overlay_env_before_names == "" { "[]" } else { $overlay_env_before_names })
+    }
+  ] }
+  $hide_overlays ++ $hide_exports ++ $restore_overlay_env
 }
 
 def --env "__nu-direnv-overlay load-direnv-env" [] {
@@ -161,6 +179,9 @@ def --env "__nu-direnv-overlay load-direnv-env" [] {
   let overlay_state = {
     NU_DIRENV_OVERLAY_ACTIVE: ($env.NU_DIRENV_OVERLAY_ACTIVE? | default null)
     NU_DIRENV_OVERLAY_EXPORTS: ($env.NU_DIRENV_OVERLAY_EXPORTS? | default null)
+    NU_DIRENV_OVERLAY_ENV_NAMES: ($env.NU_DIRENV_OVERLAY_ENV_NAMES? | default null)
+    NU_DIRENV_OVERLAY_ENV_BEFORE: ($env.NU_DIRENV_OVERLAY_ENV_BEFORE? | default null)
+    NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES: ($env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES? | default null)
     NU_DIRENV_OVERLAY_APPLY_LOADED: ($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default null)
     NU_DIRENV_OVERLAY_APPLY_PWD: ($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default null)
   }
@@ -224,11 +245,9 @@ def "__nu-direnv-overlay apply-plan" [apply: string] {
   # Every apply starts with cleanup. direnv can rebuild the apply file when
   # .envrc changes, and repeated `overlay use --reload` without hiding first can
   # leave old exported definitions visible.
-  let keep_env = (__nu-direnv-overlay current-env-literal)
   (__nu-direnv-overlay cleanup-plan --hide-overlays) ++ [
     { type: source_apply, path: $apply }
     { type: mark_apply_pwd, pwd: (pwd) }
-    { type: load_env, env: $keep_env }
   ]
 }
 
@@ -242,6 +261,9 @@ def "__nu-direnv-overlay cleanup-plan-only" [] {
     { type: line, source: '$env.DIRENV_NU_OVERLAY_APPLY = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_ACTIVE = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_EXPORTS = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_NAMES = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_BEFORE = ""' }
+    { type: line, source: '$env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""' }
     { type: line, source: '$env.NU_DIRENV_OVERLAY_APPLY_PWD = ""' }
   ]
@@ -253,10 +275,13 @@ def "__nu-direnv-overlay cleanup-needed" [] {
   let has_apply = (($env.DIRENV_NU_OVERLAY_APPLY? | default "") != "")
   let has_active_marker = (($env.NU_DIRENV_OVERLAY_ACTIVE? | default "") != "")
   let has_exports_marker = (($env.NU_DIRENV_OVERLAY_EXPORTS? | default "") != "")
+  let has_env_marker = (($env.NU_DIRENV_OVERLAY_ENV_NAMES? | default "") != "")
+  let has_env_before_marker = (($env.NU_DIRENV_OVERLAY_ENV_BEFORE? | default "") != "")
+  let has_env_before_names_marker = (($env.NU_DIRENV_OVERLAY_ENV_BEFORE_NAMES? | default "") != "")
   let has_loaded_marker = (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != "")
   let has_pwd_marker = (($env.NU_DIRENV_OVERLAY_APPLY_PWD? | default "") != "")
 
-  $has_exports or $has_active_overlay or $has_apply or $has_active_marker or $has_exports_marker or $has_loaded_marker or $has_pwd_marker
+  $has_exports or $has_active_overlay or $has_apply or $has_active_marker or $has_exports_marker or $has_env_marker or $has_env_before_marker or $has_env_before_names_marker or $has_loaded_marker or $has_pwd_marker
 }
 
 def "__nu-direnv-overlay ensure-source" [--reset] {
@@ -311,6 +336,9 @@ def "__nu-direnv-overlay render-action" [action: record] {
     }
     "hide_export" => {
       __nu-direnv-overlay hide-export-line $action.name
+    }
+    "restore_overlay_env" => {
+      __nu-direnv-overlay restore-overlay-env-line $action.names $action.before_env $action.before_names
     }
     "source_apply" => {
       $"source ((__nu-direnv-overlay quote $action.path))"

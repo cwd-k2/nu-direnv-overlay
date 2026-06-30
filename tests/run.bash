@@ -18,13 +18,17 @@ setup_integration_fixtures() {
   allow_standard_fixtures
   create_path_fixture "$TMPDIR/path fixture"
   allow_fixture "$TMPDIR/path fixture"
+  create_export_env_fixture "$TMPDIR/export-env"
+  allow_fixture "$TMPDIR/export-env"
 
   apply=$(apply_path_for "$TMPDIR/project")
   nested_apply=$(apply_path_for "$TMPDIR/nested/child")
   path_fixture_apply=$(apply_path_for "$TMPDIR/path fixture")
+  export_env_apply=$(apply_path_for "$TMPDIR/export-env")
   test -f "$apply"
   test -f "$nested_apply"
   test -f "$path_fixture_apply"
+  test -f "$export_env_apply"
 
   direnv_json_for "$TMPDIR/project" "$TMPDIR/inherited.json"
   direnv_json_for "$TMPDIR/project" "$TMPDIR/inherited-again.json"
@@ -38,6 +42,7 @@ run_integration_installation_tests() {
   assert_installed_files
   assert_direnv_api
   assert_nu_autoload
+  assert_helper_hook_output_quoting
 }
 
 run_unit_tests() {
@@ -50,8 +55,8 @@ run_unit_tests() {
 }
 
 run_integration_direnv_generation_tests() {
-  # User story: .envrc declarations generate deterministic, cleanup-aware
-  # apply files, while unsupported declarations fail without stale apply state.
+  # User story: .envrc declarations generate cleanup-aware apply files, while
+  # unsupported declarations fail without stale apply state.
   run_direnv_api_regressions
   run_nu_test integration apply apply "$apply"
   run_nu_test integration source-up apply "$nested_apply"
@@ -59,6 +64,15 @@ run_integration_direnv_generation_tests() {
     apply "$path_fixture_apply" \
     path_fixture_json "$TMPDIR/path-fixture.json" \
     path_fixture_dir "$TMPDIR/path fixture"
+  export_env_apply_wrapper="$TMPDIR/export-env-apply-wrapper.nu"
+  export_env_cleanup_wrapper="$TMPDIR/export-env-cleanup-wrapper.nu"
+  run_nu_test integration export-env-apply-generate \
+    apply "$export_env_apply" \
+    apply_wrapper "$export_env_apply_wrapper" \
+    cleanup_wrapper "$export_env_cleanup_wrapper"
+  run_nu_test integration export-env-apply \
+    apply_wrapper "$export_env_apply_wrapper" \
+    cleanup_wrapper "$export_env_cleanup_wrapper"
 }
 
 run_integration_hook_entrypoint_tests() {

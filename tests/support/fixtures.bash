@@ -77,6 +77,21 @@ export def path_fixture_hi [] { "path-ok" }
 EOF
 }
 
+create_export_env_fixture() {
+  local project_dir=$1
+
+  mkdir -p "$project_dir/overlay"
+  cat >"$project_dir/.envrc" <<'EOF'
+use nu-overlay overlay/env.nu
+EOF
+  cat >"$project_dir/overlay/env.nu" <<'EOF'
+export-env {
+  $env.EXPORT_ENV_MARK = "overlay"
+  $env.EXPORT_ENV_NEW = "new"
+}
+EOF
+}
+
 allow_fixture() {
   local project_dir=$1
 

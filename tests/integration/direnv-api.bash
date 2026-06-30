@@ -214,6 +214,29 @@ EOF
   assert_file_contains "$err" 'nu overlay file not found' "invalid declaration after valid one did not report missing overlay"
 }
 
+assert_direnv_failure_does_not_remove_inherited_internal_dir() {
+  local project_dir="$TMPDIR/inherited-internal-dir"
+  local inherited_dir="$TMPDIR/inherited-internal-dir-must-survive"
+  local out="$project_dir/export.json"
+  local err="$project_dir/export.err"
+
+  mkdir -p "$project_dir" "$inherited_dir"
+  cat >"$project_dir/.envrc" <<'EOF'
+use nu-overlay missing.nu
+EOF
+  allow_fixture "$project_dir"
+
+  (
+    cd "$project_dir"
+    env __NU_DIRENV_OVERLAY_DIR="$inherited_dir" \
+      "$DIRENV" export json >"$out" 2>"$err" || true
+  )
+
+  test -d "$inherited_dir"
+  assert_file_not_contains "$out" 'DIRENV_NU_OVERLAY_APPLY' "invalid declaration leaked apply env with inherited internal dir"
+  assert_file_contains "$err" 'nu overlay file not found' "invalid declaration did not report missing overlay with inherited internal dir"
+}
+
 assert_direnv_invalid_overlay_api_cleans_apply() {
   local missing="$TMPDIR/invalid-missing"
   local explicit="$TMPDIR/invalid-explicit-name"
@@ -262,5 +285,6 @@ run_direnv_api_regressions() {
   assert_direnv_overlay_module_change_rebuilds_apply
   assert_direnv_blocked_envrc_unloads_apply
   assert_direnv_invalid_after_valid_cleans_partial_apply
+  assert_direnv_failure_does_not_remove_inherited_internal_dir
   assert_direnv_invalid_overlay_api_cleans_apply
 }

@@ -128,14 +128,18 @@ $env.NU_DIRENV_OVERLAY_EXPORTS = (
 )
 ```
 
-Internally, the actual Nushell overlay names are derived from the project path
-and each overlay file path, using `nu-direnv-<uid>-<project-checksum>-<file-checksum>`.
-This avoids user-managed names and lets cleanup hide only overlays created by
-this tool. Exported commands keep their original names; for example,
-`overlay/task.nu` can still expose `build`.
+Internally, the actual Nushell overlay names are generated as private
+`nu-direnv-<uid>-...` names from the project, overlay path, and current direnv
+evaluation. They are not a user-facing contract. This avoids user-managed names
+and prevents hidden definitions from an old evaluation from shadowing the same
+command when a project is applied again. Exported commands keep their original
+names; for example, `overlay/task.nu` can still expose `build`.
 
-The generated `apply.nu` only loads the new overlays and records the exported
-definition names. Cleanup is generated in the parent Nushell session as a
+The generated `apply.nu` loads the new overlays and records only Nushell overlay
+state: active internal overlay names, exported definition names, and
+`export-env` changes made while sourcing the overlay modules. It does not take
+ownership of ordinary `.envrc` environment values; those remain direnv's
+responsibility. Cleanup is generated in the parent Nushell session as a
 per-session wrapper, because only that session can see and mutate the active
 interactive overlays:
 
@@ -153,6 +157,7 @@ hide "build"
 hide "project_name"
 $env.NU_DIRENV_OVERLAY_ACTIVE = ""
 $env.NU_DIRENV_OVERLAY_EXPORTS = ""
+$env.NU_DIRENV_OVERLAY_ENV_NAMES = ""
 $env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""
 ```
 
@@ -160,10 +165,12 @@ Cleanup snapshots the current post-direnv environment before hiding old
 overlays, keeps `PWD` and non-serializable prompt closures during
 `overlay hide`, removes names resurrected from the old overlay activation
 environment, then restores the snapshot. This prevents old project environment
-values from leaking back while moving between projects. Nushell can also leave
-exported definitions visible after an overlay becomes inactive, so
-`NU_DIRENV_OVERLAY_EXPORTS` tracks exported commands, aliases, externs,
-constants, and submodules and hides those names during cleanup.
+values from leaking back while moving between projects. If an overlay module
+uses `export-env`, the apply file records the names it changed and their
+pre-overlay values so cleanup can restore only those overlay-owned changes.
+Nushell can also leave exported definitions visible after an overlay becomes
+inactive, so `NU_DIRENV_OVERLAY_EXPORTS` tracks exported commands, aliases,
+externs, constants, and submodules and hides those names during cleanup.
 
 Cleanup hides exported definitions by name. In normal use those names come from
 the project overlay, but if you manually define another command, alias, extern,

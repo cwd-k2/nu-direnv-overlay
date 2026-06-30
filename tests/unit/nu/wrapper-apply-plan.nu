@@ -3,8 +3,8 @@ use std/assert
 source $autoload
 
 # Apply plans run when direnv exposes a real generated apply file. They must
-# clean stale overlay state first, then source the new file and restore the
-# current post-direnv environment around overlay frame changes.
+# clean stale overlay state first, then source the new file without reverting
+# export-env changes from the overlay being applied.
 let apply = ($tmpdir | path join "unit-wrapper-plan-apply.nu")
 "" | save --force $apply
 $env.DIRENV_NU_OVERLAY_APPLY = $apply
@@ -20,7 +20,7 @@ assert equal (
 ) 1 "apply plan did not record the apply cwd marker"
 assert equal (
   $apply_plan.actions | where type == load_env | length
-) 1 "apply plan did not include environment restoration"
+) 0 "apply plan should not restore environment after sourcing a new overlay"
 
 # A new apply can replace a previous project or a rebuilt .envrc. Tracked
 # overlays and exports from the old state must be removed before sourcing.

@@ -5,6 +5,14 @@ set -euo pipefail
 # It does not perform hook installation itself; it only prints paths/snippets so
 # users or Nix modules can place them in the right config file.
 
+quote_nu() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  printf '"%s"' "$value"
+}
+
 case "${1:-help}" in
   hook)
     case "${2:-}" in
@@ -12,7 +20,7 @@ case "${1:-help}" in
         # Print a literal Nushell source line. Nushell parser keywords require a
         # literal path, so callers should paste/evaluate this exact output.
         pkg=${NU_DIRENV_OVERLAY_PKG:-$(cd "$(dirname "$0")/.." && pwd -P)}
-        printf 'source %q\n' "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+        printf 'source %s\n' "$(quote_nu "$pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu")"
         ;;
       direnv)
         # Print a literal Bash source line for direnvrc. direnv evaluates .envrc

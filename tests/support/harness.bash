@@ -43,6 +43,25 @@ assert_nu_autoload() {
   run_nu --commands 'source "'"$autoload"'"; nu-direnv-overlay status | ignore'
 }
 
+assert_helper_hook_output_quoting() {
+  local fake_pkg="$TMPDIR/pkg with \"quote"
+  local fake_nu="$fake_pkg/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
+  local fake_direnv="$fake_pkg/share/direnv/lib/nu-overlay.sh"
+
+  mkdir -p "$(dirname "$fake_nu")" "$(dirname "$fake_direnv")"
+  printf 'export def "nu-direnv-overlay status" [] { null }\n' >"$fake_nu"
+  printf 'use_nu-overlay() { :; }\n' >"$fake_direnv"
+
+  NU_DIRENV_OVERLAY_PKG="$fake_pkg" "$PKG/bin/nu-direnv-overlay" hook nu >"$TMPDIR/hook.nu"
+  run_nu --commands "$(cat "$TMPDIR/hook.nu"); nu-direnv-overlay status | ignore"
+
+  NU_DIRENV_OVERLAY_PKG="$fake_pkg" "$PKG/bin/nu-direnv-overlay" hook direnv >"$TMPDIR/direnvrc"
+  (
+    . "$TMPDIR/direnvrc"
+    type use_nu-overlay >/dev/null
+  )
+}
+
 write_nu_test() {
   local test_layer=$1
   local case_name=$2

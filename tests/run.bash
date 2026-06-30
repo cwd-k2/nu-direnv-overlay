@@ -44,6 +44,7 @@ run_unit_tests() {
   # User story: local Nushell helpers preserve unrelated user hook config while
   # installing the sync/source pair idempotently.
   run_nu_test unit hooks
+  run_nu_test unit load-direnv-env
   run_nu_test unit wrapper-apply-plan
   run_nu_test unit wrapper-cleanup-plan
 }
@@ -86,6 +87,14 @@ run_integration_hook_entrypoint_tests() {
   run_nu_test integration sync-preserves-last-exit-code \
     inherited_json "$TMPDIR/inherited.json" \
     wrapper "$last_exit_wrapper"
+  last_exit_unset_wrapper=$(
+    run_nu_test_stdout integration last-exit-code-unset-generate \
+      inherited_json "$TMPDIR/inherited.json" \
+      apply "$reloaded_apply"
+  )
+  run_nu_test integration last-exit-code-unset \
+    apply "$reloaded_apply" \
+    wrapper "$last_exit_unset_wrapper"
 }
 
 run_integration_wrapper_transition_tests() {

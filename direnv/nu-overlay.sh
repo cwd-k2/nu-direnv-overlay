@@ -23,7 +23,8 @@ __nu_direnv_overlay_fail() {
   # hook performs cleanup instead of sourcing a partial or stale file.
   unset DIRENV_NU_OVERLAY_APPLY
   if [[ -n ${__NU_DIRENV_OVERLAY_DIR:-} ]]; then
-    rm -f "$__NU_DIRENV_OVERLAY_DIR/apply.nu"
+    rm -rf "$__NU_DIRENV_OVERLAY_DIR"
+    unset __NU_DIRENV_OVERLAY_DIR
   fi
 }
 

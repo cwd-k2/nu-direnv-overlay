@@ -216,9 +216,18 @@ run_repl_path_completion_regression() {
     "cd \"$TMPDIR/repl-outside\""
 }
 
+run_repl_command_completion_regression() {
+  run_repl_pty_completion_scenario \
+    project-command-completion \
+    "setup_" \
+    "setup_hi" \
+    "cd \"$TMPDIR/repl-setup\""
+}
+
 run_repl_regressions() {
   prepare_repl_fixture
   write_repl_autoload
   run_repl_state_regressions
+  run_repl_command_completion_regression
   run_repl_path_completion_regression
 }

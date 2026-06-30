@@ -80,23 +80,21 @@ Nushell direnv hook
   -> /tmp/nu-direnv-overlay.XXXXXXXXXX/apply.nu
   -> DIRENV_NU_OVERLAY_APPLY
   -> Nushell load-env
-nu-direnv-overlay pre_execution hook
-  -> refreshes direnv env for the current command
+nu-direnv-overlay sync hook
+  -> refreshes direnv env for the current directory
   -> writes a per-session wrapper
-nu-direnv-overlay pre_execution source hook
-  -> sources the wrapper before command resolution
+nu-direnv-overlay source hook
+  -> sources the wrapper after cd and before command resolution
 ```
 
 direnv still owns `.envrc` evaluation and file watching. The normal Nushell
-direnv hook can load env for prompt rendering; `nu-direnv-overlay` refreshes
-env and overlays immediately before command execution. This avoids stale prompt
-wrapper state by making command-time synchronization the only automatic overlay
-source path. The tradeoff is deliberate: after `cd`, overlay commands may not
-be available to prompt-time integrations or tab completion until the next
-command is submitted. Typed commands still resolve after the split
-`pre_execution` hooks run. The overlay state must be applied inside the parent
-shell, because a child `direnv` process cannot mutate parent-shell overlays
-directly.
+direnv hook can load env for prompt rendering; `nu-direnv-overlay` installs the
+same split sync/source pair in `pre_prompt` and `pre_execution`, plus a PWD
+change sync hook that refreshes the wrapper immediately after `cd`. The prompt
+hook keeps path completion and project commands in sync; the pre-execution hook
+refreshes again before command resolution. The overlay state must be applied
+inside the parent shell, because a child direnv process cannot mutate
+parent-shell overlays directly.
 
 The `.envrc` function writes a Nushell apply file and exports its path as
 `DIRENV_NU_OVERLAY_APPLY`:

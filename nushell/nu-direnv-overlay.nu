@@ -6,12 +6,12 @@
 # - The normal Nushell direnv hook owns prompt-time `direnv export json` and
 #   `load-env`.
 # - This file applies the extra Nushell overlay state exposed through
-#   DIRENV_NU_OVERLAY_APPLY, and refreshes env in split pre_execution hooks so
-#   stale prompt string sources cannot break the user's next command.
+#   DIRENV_NU_OVERLAY_APPLY, and refreshes env in split hooks so stale prompt
+#   string sources cannot break the user's next command or path completion.
 #
 # This split is intentional. Prompt rendering can still be handled by the
-# user's normal direnv hook; overlay definitions are made correct immediately
-# before the next command is parsed and resolved.
+# user's normal direnv hook; directory changes refresh the wrapper, then prompt
+# and command hooks source it before completion or command resolution.
 
 # Stable per-session wrapper path. Hook strings are installed once, while the
 # file contents are rewritten before each command. Keep it out of /tmp so
@@ -20,11 +20,11 @@ const overlay_source = ($nu.cache-dir | path join "nu-direnv-overlay" $"($nu.pid
 
 # Keep sync and source as separate adjacent hooks. Nushell resolves `source`
 # inputs early inside one string hook, so a single `sync; source ...` string can
-# source the wrapper contents from before sync rewrote them. Split
-# pre_execution hooks have been verified to let the source hook see the freshly
-# written file before the user's command resolves.
-const overlay_pre_execution_sync_command = "__nu-direnv-overlay pre-execution-sync"
-const overlay_pre_execution_source_command = $"source '($overlay_source)'"
+# source the wrapper contents from before sync rewrote them. Split hooks have
+# been verified to let the source hook see the freshly written file before the
+# user's command resolves or prompt-time completion reads the scope.
+const overlay_sync_command = "__nu-direnv-overlay sync"
+const overlay_source_command = $"source '($overlay_source)'"
 
 def --env "__nu-direnv-overlay quote" [value: string] {
   # Generated wrapper files contain literal Nushell code, not runtime variables.
@@ -150,26 +150,38 @@ def --env "__nu-direnv-overlay load-direnv-env" [] {
 
   try {
     let exported = (direnv export json | complete)
+    let env_delta = ($exported.stdout | from json --strict | default {})
+    let env_rows = ($env_delta | transpose name value)
 
-    $exported.stdout
-    | from json --strict
-    | default {}
-    | items {|key, value|
-        let value = do (
-          {
-            "PATH": {
-              from_string: {|s| $s | split row (char esep) | path expand --no-symlink }
-              to_string: {|v| $v | path expand --no-symlink | str join (char esep) }
-            }
-          }
-          | merge ($env.ENV_CONVERSIONS? | default {})
-          | get ([[value, optional, insensitive]; [$key, true, true] [from_string, true, false]] | into cell-path)
-          | if ($in | is-empty) { {|x| $x} } else { $in }
-        ) $value
-        return [ $key $value ]
+    for name in ($env_rows | where value == null | get name) {
+      if $name == "DIRENV_NU_OVERLAY_APPLY" {
+        $env.DIRENV_NU_OVERLAY_APPLY = ""
+      } else {
+        hide-env $name --ignore-errors
       }
-    | into record
-    | load-env
+    }
+
+    let env_values = ($env_rows | where value != null)
+    if ($env_values | is-not-empty) {
+      $env_values
+      | transpose --header-row --as-record
+      | items {|key, value|
+          let value = do (
+            {
+              "PATH": {
+                from_string: {|s| $s | split row (char esep) | path expand --no-symlink }
+                to_string: {|v| $v | path expand --no-symlink | str join (char esep) }
+              }
+            }
+            | merge ($env.ENV_CONVERSIONS? | default {})
+            | get ([[value, optional, insensitive]; [$key, true, true] [from_string, true, false]] | into cell-path)
+            | if ($in | is-empty) { {|x| $x} } else { $in }
+          ) $value
+          return [ $key $value ]
+        }
+      | into record
+      | load-env
+    }
     $overlay_state
     | transpose name value
     | where value != null
@@ -207,6 +219,7 @@ def "__nu-direnv-overlay cleanup-wrapper-lines" [] {
   # When direnv unloads a directory, there is no project apply file anymore.
   # The wrapper still needs to remove active overlays and clear tracking env.
   (__nu-direnv-overlay cleanup-lines) ++ [
+    'hide-env DIRENV_NU_OVERLAY_APPLY --ignore-errors'
     '$env.NU_DIRENV_OVERLAY_ACTIVE = ""'
     '$env.NU_DIRENV_OVERLAY_EXPORTS = ""'
     '$env.NU_DIRENV_OVERLAY_APPLY_LOADED = ""'
@@ -221,11 +234,11 @@ def "__nu-direnv-overlay ensure-source" [--reset] {
 }
 
 def "__nu-direnv-overlay apply-already-loaded" [apply: string] {
-  # pre_execution runs before every command. Re-hiding exported commands and then
-  # sourcing the exact same overlay can leave Nushell with commands hidden while
-  # their module is active. If the same apply file is already loaded and the
-  # active nu-direnv overlay set exactly matches what that apply file tracks, the
-  # correct wrapper is a no-op.
+  # Sync runs before prompt rendering and before every command. Re-hiding
+  # exported commands and then sourcing the exact same overlay can leave Nushell
+  # with commands hidden while their module is active. If the same apply file is
+  # already loaded and the active nu-direnv overlay set exactly matches what
+  # that apply file tracks, the correct wrapper is a no-op.
   if ($apply == "" or (($env.NU_DIRENV_OVERLAY_APPLY_LOADED? | default "") != $apply)) {
     return false
   }
@@ -254,28 +267,43 @@ def --env "__nu-direnv-overlay write-source" [--cleanup-only] {
     __nu-direnv-overlay cleanup-wrapper-lines
   }
 
-  # The pre_execution source hook reads this stable path after the previous
-  # pre_execution sync hook has rewritten it for the current directory.
+  # The source hook reads this stable path after the adjacent sync hook has
+  # rewritten it for the current directory.
   $body | str join (char newline) | save --force $overlay_source
 }
 
-def --env "__nu-direnv-overlay install-pre-execution-hooks" [--preserve-source] {
-  let existing_hooks = ($env.config?.hooks?.pre_execution? | default [])
-
-  __nu-direnv-overlay ensure-source --reset=(not $preserve_source)
-
+def "__nu-direnv-overlay merge-hook-pair" [existing_hooks: list] {
   let hooks = (
     $existing_hooks
-    | where {|hook| $hook != $overlay_pre_execution_sync_command and $hook != $overlay_pre_execution_source_command }
+    | where {|hook| $hook != $overlay_sync_command and $hook != $overlay_source_command }
   )
+
+  $hooks
+  | append $overlay_sync_command
+  | append $overlay_source_command
+}
+
+def "__nu-direnv-overlay merge-sync-hook" [existing_hooks: list] {
+  $existing_hooks
+  | where {|hook| $hook != $overlay_sync_command }
+  | append $overlay_sync_command
+}
+
+def --env "__nu-direnv-overlay install-hooks" [--preserve-source] {
+  __nu-direnv-overlay ensure-source --reset=(not $preserve_source)
+
   $env.config.hooks.pre_execution = (
-    $hooks
-    | append $overlay_pre_execution_sync_command
-    | append $overlay_pre_execution_source_command
+    __nu-direnv-overlay merge-hook-pair ($env.config?.hooks?.pre_execution? | default [])
+  )
+  $env.config.hooks.env_change.PWD = (
+    __nu-direnv-overlay merge-sync-hook ($env.config?.hooks?.env_change?.PWD? | default [])
+  )
+  $env.config.hooks.pre_prompt = (
+    __nu-direnv-overlay merge-hook-pair ($env.config?.hooks?.pre_prompt? | default [])
   )
 }
 
-def --env "__nu-direnv-overlay pre-execution-sync" [] {
+def --env "__nu-direnv-overlay sync" [] {
   __nu-direnv-overlay load-direnv-env
   __nu-direnv-overlay write-source
 }
@@ -294,14 +322,14 @@ export def --env "nu-direnv-overlay status" [] {
 export def --env "nu-direnv-overlay reload" [] {
   # Manual resync for troubleshooting. It refreshes direnv env for the current
   # directory, rewrites the wrapper, and reinstalls hooks.
-  __nu-direnv-overlay pre-execution-sync
-  __nu-direnv-overlay install-pre-execution-hooks --preserve-source
+  __nu-direnv-overlay sync
+  __nu-direnv-overlay install-hooks --preserve-source
 }
 
 if $nu.is-interactive {
   # Official Nushell hooks only run in interactive sessions. That is exactly
   # where overlays matter, so non-interactive `nu -c` and scripts stay inert.
   #
-  __nu-direnv-overlay install-pre-execution-hooks
-  __nu-direnv-overlay pre-execution-sync
+  __nu-direnv-overlay install-hooks
+  __nu-direnv-overlay sync
 }

@@ -1,11 +1,14 @@
 use std/assert
 
 source $autoload
-open $inherited_json | load-env
+
+let apply = ($tmpdir | path join "unit-wrapper-plan-apply.nu")
+"" | save --force $apply
+$env.DIRENV_NU_OVERLAY_APPLY = $apply
 
 let apply_plan = (__nu-direnv-overlay wrapper-plan)
 assert equal $apply_plan.type apply "wrapper plan did not choose apply for an existing apply file"
-assert equal $apply_plan.apply $env.DIRENV_NU_OVERLAY_APPLY "wrapper plan did not record the apply path"
+assert equal $apply_plan.apply $apply "wrapper plan did not record the apply path"
 assert equal (
   $apply_plan.actions | where type == source_apply | length
 ) 1 "apply plan did not include one source action"

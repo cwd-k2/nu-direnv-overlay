@@ -22,11 +22,11 @@ Put the Nushell modules you want to expose inside `overlay/`. For example,
 
 ```nu
 export def build [] {
-  cargo build
+  print "build project"
 }
 
 export def test [] {
-  cargo test
+  print "run project tests"
 }
 ```
 

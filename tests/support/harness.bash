@@ -3,7 +3,7 @@
 autoload="$PKG/share/nushell/vendor/autoload/nu-direnv-overlay.nu"
 direnv_lib="$PKG/share/direnv/lib/nu-overlay.sh"
 direnv_bin_dir=$(dirname "$DIRENV")
-generated_dir="$TMPDIR/generated"
+generated_tests_dir="$TMPDIR/generated-tests"
 
 nu_quote() {
   local value=$1
@@ -23,7 +23,7 @@ init_test_env() {
   export XDG_DATA_HOME="$TMPDIR/data"
   export XDG_CACHE_HOME="$TMPDIR/cache"
 
-  mkdir -p "$HOME" "$XDG_CONFIG_HOME/direnv" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$generated_dir"
+  mkdir -p "$HOME" "$XDG_CONFIG_HOME/direnv" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$generated_tests_dir"
   printf 'source %q\n' "$direnv_lib" >"$XDG_CONFIG_HOME/direnv/direnvrc"
 }
 
@@ -44,9 +44,10 @@ assert_nu_autoload() {
 }
 
 write_nu_test() {
-  local name=$1
-  local out=$2
-  shift 2
+  local test_layer=$1
+  local case_name=$2
+  local out=$3
+  shift 3
 
   {
     printf 'const tmpdir = %s\n' "$(nu_quote "$TMPDIR")"
@@ -55,7 +56,7 @@ write_nu_test() {
     printf 'const project_dir = %s\n' "$(nu_quote "$TMPDIR/project")"
     printf 'const project_b_dir = %s\n' "$(nu_quote "$TMPDIR/project-b")"
     printf 'const nested_child_dir = %s\n' "$(nu_quote "$TMPDIR/nested/child")"
-    printf 'const assert_file = %s\n' "$(nu_quote "$test_dir/nu/assert.nu")"
+    printf 'const assert_file = %s\n' "$(nu_quote "$test_dir/support/nu/assert.nu")"
     printf 'source $assert_file\n'
 
     while [ "$#" -gt 0 ]; do
@@ -66,25 +67,27 @@ write_nu_test() {
     done
 
     printf '\n'
-    printf 'source %s\n' "$(nu_quote "$test_dir/nu/$name.nu")"
+    printf 'source %s\n' "$(nu_quote "$test_dir/$test_layer/nu/$case_name.nu")"
   } >"$out"
 }
 
 run_nu_test() {
-  local name=$1
-  local generated="$generated_dir/$name.nu"
-  shift
+  local test_layer=$1
+  local case_name=$2
+  local generated="$generated_tests_dir/$test_layer-$case_name.nu"
+  shift 2
 
-  write_nu_test "$name" "$generated" "$@"
+  write_nu_test "$test_layer" "$case_name" "$generated" "$@"
   run_nu "$generated"
 }
 
 run_nu_test_stdout() {
-  local name=$1
-  local generated="$generated_dir/$name.nu"
-  shift
+  local test_layer=$1
+  local case_name=$2
+  local generated="$generated_tests_dir/$test_layer-$case_name.nu"
+  shift 2
 
-  write_nu_test "$name" "$generated" "$@"
+  write_nu_test "$test_layer" "$case_name" "$generated" "$@"
   run_nu "$generated"
 }
 

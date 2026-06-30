@@ -63,3 +63,25 @@ allow_standard_fixtures() {
     "$DIRENV" allow . >/dev/null
   )
 }
+
+create_path_fixture() {
+  local project_dir=$1
+
+  mkdir -p "$project_dir/overlay dir"
+  cat >"$project_dir/.envrc" <<'EOF'
+export PATH_FIXTURE_ROOT="$PWD"
+use nu-overlay "overlay dir/task file.nu"
+EOF
+  cat >"$project_dir/overlay dir/task file.nu" <<'EOF'
+export def path_fixture_hi [] { "path-ok" }
+EOF
+}
+
+allow_fixture() {
+  local project_dir=$1
+
+  (
+    cd "$project_dir"
+    "$DIRENV" allow . >/dev/null
+  )
+}

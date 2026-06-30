@@ -39,8 +39,8 @@
           ];
         };
 
-        # The integration check lives in tests/ so the flake output definition
-        # stays focused on wiring package paths into the test environment.
+        # The test runner lives in tests/ so the flake output definition stays
+        # focused on wiring package paths into the test environment.
         checks.default = pkgs.runCommand "nu-direnv-overlay-check" { } ''
           set -eu
           export PKG="${self.packages.${system}.default}"
@@ -48,7 +48,7 @@
           export DIRENV="${pkgs.direnv}/bin/direnv"
           export TEST_DIR="${./tests}"
 
-          ${pkgs.bash}/bin/bash ${./tests/integration.bash}
+          ${pkgs.bash}/bin/bash ${./tests/run.bash}
 
           # runCommand outputs must create $out on success.
           touch "$out"

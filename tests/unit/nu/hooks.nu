@@ -2,6 +2,9 @@ use std/assert
 
 source $autoload
 
+# Hook installation must preserve user hooks, deduplicate our generated string
+# hooks, and reset the stable wrapper file so stale source code is not executed
+# before the next sync rewrites it.
 $env.config.hooks.env_change = { PWD: [{|before, after| "existing" }] }
 let wrapper = (wrapper-path)
 let sq = (char -i 39)

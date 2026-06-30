@@ -44,7 +44,8 @@ run_unit_tests() {
   # User story: local Nushell helpers preserve unrelated user hook config while
   # installing the sync/source pair idempotently.
   run_nu_test unit hooks
-  run_nu_test unit wrapper-plan
+  run_nu_test unit wrapper-apply-plan
+  run_nu_test unit wrapper-cleanup-plan
 }
 
 run_integration_direnv_generation_tests() {
